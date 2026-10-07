@@ -11,7 +11,7 @@
 
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 cd "${ROOT}"
 
 OUT="${1:-${ROOT}/dist/candidate-bundle}"

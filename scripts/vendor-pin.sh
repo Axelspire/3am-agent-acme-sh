@@ -47,7 +47,7 @@ case "${PIN}" in
     ;;
 esac
 
-ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 cd "${ROOT}"
 
 ARCHIVE_DIR="${ROOT}/archive"

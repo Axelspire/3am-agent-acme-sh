@@ -11,7 +11,7 @@
 
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 BUNDLE="${1:-${ROOT}/dist/candidate-bundle}"
 [ -d "${BUNDLE}" ] || { echo "smoke-candidate: missing bundle ${BUNDLE}" >&2; exit 1; }
 [ -f "${BUNDLE}/install.sh" ] || { echo "smoke-candidate: no install.sh in bundle" >&2; exit 1; }
