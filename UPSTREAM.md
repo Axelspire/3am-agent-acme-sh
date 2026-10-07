@@ -55,7 +55,11 @@ CI will:
 Optional local check of the prerelease:
 
 ```bash
-gh release download 'candidate-v0.2.0+pin-3.1.0' -R Axelspire/3am-agent-acme-sh -D /tmp/cand
+# Prefer candidate-layout.tar.gz (nested paths). Plain `gh release download`
+# flattens archive/tags/companion asset names.
+gh release download 'candidate-v0.2.0+pin-3.1.0' -R Axelspire/3am-agent-acme-sh \
+  -p candidate-layout.tar.gz -D /tmp
+mkdir -p /tmp/cand && tar -xzf /tmp/candidate-layout.tar.gz -C /tmp/cand
 cd /tmp/cand && python3 -m http.server 8765 &
 THREEAM_AGENT_BASE=http://127.0.0.1:8765 \
   THREEAM_SCAN_SERVER=https://scan.smoke.invalid \

@@ -121,6 +121,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git tag -a "${TAG}" -m "Candidate pin ${PIN}"
           git push origin "${TAG}"
+          # Nested layout tarball — gh release download flattens individual asset paths
+          tar -C dist/candidate-bundle -czf dist/candidate-layout.tar.gz .
           (
             cd dist/candidate-bundle
             gh release create "${TAG}" \
@@ -133,15 +135,17 @@ jobs:
           - Smoke: local HTTP install in CI passed
           - Next: run **publish-pin** with \`candidate_ref=${TAG}\` after LGTM
 
-          Test locally:
+          Test locally (prefer layout tarball — individual assets flatten on download):
           \`\`\`bash
-          gh release download '${TAG}' -R ${{ github.repository }} -D /tmp/cand
+          gh release download '${TAG}' -R ${{ github.repository }} -p candidate-layout.tar.gz -D /tmp
+          mkdir -p /tmp/cand && tar -xzf /tmp/candidate-layout.tar.gz -C /tmp/cand
           cd /tmp/cand && python3 -m http.server 8765 &
           THREEAM_AGENT_BASE=http://127.0.0.1:8765 THREEAM_SCAN_SERVER=https://scan.smoke.invalid \\
             ACME_EMAIL=smoke@example.invalid ./install.sh
           \`\`\`
           EOF
           )" \
+              ../candidate-layout.tar.gz \
               install.sh INSTALL.md pin MODULE manifest.json ARCHIVE_SHA256.txt \
               CANDIDATE_TAG.txt UPSTREAM_PIN.txt \
               "archive/${PIN}.tar.gz" "tags/${PIN}" \

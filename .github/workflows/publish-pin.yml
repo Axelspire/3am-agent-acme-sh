@@ -43,8 +43,31 @@ jobs:
           TAG: ${{ inputs.candidate_ref }}
         run: |
           set -euo pipefail
-          mkdir -p /tmp/candidate
-          gh release download "${TAG}" -R "${{ github.repository }}" -D /tmp/candidate
+          # gh release download flattens nested asset paths (archive/, tags/, companion/).
+          # Prefer candidate-layout.tar.gz when present; else reconstruct from flat names.
+          mkdir -p /tmp/candidate-dl /tmp/candidate
+          if gh release download "${TAG}" -R "${{ github.repository }}" \
+               -p 'candidate-layout.tar.gz' -D /tmp/candidate-dl \
+             && [ -f /tmp/candidate-dl/candidate-layout.tar.gz ]; then
+            tar -xzf /tmp/candidate-dl/candidate-layout.tar.gz -C /tmp/candidate
+          else
+            gh release download "${TAG}" -R "${{ github.repository }}" -D /tmp/candidate-dl
+            PIN=$(tr -d '[:space:]' < /tmp/candidate-dl/UPSTREAM_PIN.txt)
+            mkdir -p /tmp/candidate/archive /tmp/candidate/tags \
+              /tmp/candidate/companion/deploy
+            for f in install.sh INSTALL.md pin MODULE manifest.json \
+              ARCHIVE_SHA256.txt CANDIDATE_TAG.txt UPSTREAM_PIN.txt; do
+              [ -f "/tmp/candidate-dl/${f}" ] && cp -f "/tmp/candidate-dl/${f}" "/tmp/candidate/${f}"
+            done
+            cp -f "/tmp/candidate-dl/${PIN}.tar.gz" "/tmp/candidate/archive/${PIN}.tar.gz"
+            cp -f "/tmp/candidate-dl/${PIN}" "/tmp/candidate/tags/${PIN}"
+            [ -f /tmp/candidate-dl/3am-scan.sh ] && \
+              cp -f /tmp/candidate-dl/3am-scan.sh /tmp/candidate/companion/3am-scan.sh
+            [ -f /tmp/candidate-dl/VERSION ] && \
+              cp -f /tmp/candidate-dl/VERSION /tmp/candidate/companion/VERSION
+            [ -f /tmp/candidate-dl/3am_scan.sh ] && \
+              cp -f /tmp/candidate-dl/3am_scan.sh /tmp/candidate/companion/deploy/3am_scan.sh
+          fi
           PIN=$(tr -d '[:space:]' < /tmp/candidate/UPSTREAM_PIN.txt)
           DIGEST=$(tr -d '[:space:]' < /tmp/candidate/ARCHIVE_SHA256.txt)
           MODULE=$(tr -d '[:space:]' < /tmp/candidate/MODULE)
@@ -118,21 +141,26 @@ jobs:
             deploy/agents/acmesh/manifest.json \
             "deploy/agents/acmesh/tags/${PIN}" \
             "deploy/agents/acmesh/archive/${PIN}.tar.gz"
-          git commit -m "Publish acme.sh upstream pin ${PIN} to agent/acme.sh"
-          git push -u origin "agent/acme-sh-pin-${PIN}" --force
-          body="Synced from \`${TAG}\` via **publish-pin** (frozen digest \`${DIGEST}\`).
+          if git diff --cached --quiet; then
+            echo "Core publish tree already has pin ${PIN} (digest ${DIGEST})"
+            echo "CORE_PR=(already on main)" >> "$GITHUB_ENV"
+          else
+            git commit -m "Publish acme.sh upstream pin ${PIN} to agent/acme.sh"
+            git push -u origin "agent/acme-sh-pin-${PIN}" --force
+            body="Synced from \`${TAG}\` via **publish-pin** (frozen digest \`${DIGEST}\`).
 
           Pair with fleet \`agents.acme.sh.pin: \"${PIN}\"\` then customer-deploy apply."
-          existing=$(gh pr list -R Axelspire/3am-core --head "agent/acme-sh-pin-${PIN}" --json number --jq '.[0].number // empty')
-          if [ -n "${existing}" ]; then
-            gh pr edit -R Axelspire/3am-core "${existing}" --title "Publish acme.sh upstream pin ${PIN}" --body "${body}"
-            gh pr ready -R Axelspire/3am-core "${existing}" --undo || true
-          else
-            gh pr create -R Axelspire/3am-core --draft --base main --head "agent/acme-sh-pin-${PIN}" \
-              --title "Publish acme.sh upstream pin ${PIN}" \
-              --body "${body}"
+            existing=$(gh pr list -R Axelspire/3am-core --head "agent/acme-sh-pin-${PIN}" --json number --jq '.[0].number // empty')
+            if [ -n "${existing}" ]; then
+              gh pr edit -R Axelspire/3am-core "${existing}" --title "Publish acme.sh upstream pin ${PIN}" --body "${body}"
+              gh pr ready -R Axelspire/3am-core "${existing}" --undo || true
+            else
+              gh pr create -R Axelspire/3am-core --draft --base main --head "agent/acme-sh-pin-${PIN}" \
+                --title "Publish acme.sh upstream pin ${PIN}" \
+                --body "${body}"
+            fi
+            echo "CORE_PR=$(gh pr list -R Axelspire/3am-core --head "agent/acme-sh-pin-${PIN}" --json url --jq '.[0].url')" >> "$GITHUB_ENV"
           fi
-          echo "CORE_PR=$(gh pr list -R Axelspire/3am-core --head "agent/acme-sh-pin-${PIN}" --json url --jq '.[0].url')" >> "$GITHUB_ENV"
 
       - name: Open draft PR on 3am-deployments (fleet pin)
         env:
