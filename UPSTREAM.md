@@ -19,7 +19,7 @@ Do **not** use `acme.sh --upgrade`.
 | Name | Example | What it is |
 |---|---|---|
 | **module** | `v0.2.0` | *Our* wrapper — this git repo’s `MODULE` / tag |
-| **pin** | `3.1.0` | *Upstream* acme.sh release |
+| **pin** | `3.1.1` | *Upstream* acme.sh release |
 
 Fleet (`3am-deployments` `_common/fleet-baseline.yaml`):
 
@@ -27,7 +27,7 @@ Fleet (`3am-deployments` `_common/fleet-baseline.yaml`):
 agents:
   acme.sh:
     module: v0.2.0
-    pin: "3.1.0"
+    pin: "3.1.1"
     companion: "1.1.0"
 ```
 
@@ -41,7 +41,7 @@ Actions → **propose-pin** → Run workflow:
 
 | Input | Example |
 |---|---|
-| `upstream_pin` | `3.1.0` |
+| `upstream_pin` | `3.1.1` |
 | `bump_module` | `false` (unless you also changed installer/companion) |
 
 CI will:
@@ -57,7 +57,7 @@ Optional local check of the prerelease:
 ```bash
 # Prefer candidate-layout.tar.gz (nested paths). Plain `gh release download`
 # flattens archive/tags/companion asset names.
-gh release download 'candidate-v0.2.0+pin-3.1.0' -R Axelspire/3am-agent-acme-sh \
+gh release download 'candidate-v0.2.0+pin-3.1.1' -R Axelspire/3am-agent-acme-sh \
   -p candidate-layout.tar.gz -D /tmp
 mkdir -p /tmp/cand && tar -xzf /tmp/candidate-layout.tar.gz -C /tmp/cand
 cd /tmp/cand && python3 -m http.server 8765 &
@@ -73,7 +73,7 @@ After LGTM on the candidate:
 
 1. Ensure repo secret **`PUBLISH_PAT`** can open PRs on `3am-core` + `3am-deployments`.
 2. (Recommended) Environment **`agent-pin-publish`** with required reviewers.
-3. Actions → **publish-pin** → `candidate_ref=candidate-v0.2.0+pin-3.1.0`
+3. Actions → **publish-pin** → `candidate_ref=candidate-v0.2.0+pin-3.1.1`
 
 CI downloads the **frozen** prerelease (does not re-fetch upstream), merges agent metadata, and opens **draft** PRs:
 
@@ -91,12 +91,12 @@ Merge order: agent (if still open) → core (+ tag / `modules.core` bump if requ
 Prefer Actions. Scripts remain for offline use:
 
 ```bash
-./scripts/vendor-pin.sh 3.1.0 --sync-core ../3am-core
+./scripts/vendor-pin.sh 3.1.1 --sync-core ../3am-core
 ./scripts/build-candidate-bundle.sh
 ./scripts/smoke-candidate.sh
 ```
 
-See also the worked example: Project store `docs/acme-sh-pin-3.1.0-e2e-run.md`.
+See also the worked example: Project store `docs/acme-sh-pin-3.1.1-actions-e2e.md`.
 
 ## Rules
 
