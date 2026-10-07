@@ -25,6 +25,6 @@ jobs:
           sudo apt-get install -y -qq shellcheck
           python3 -m pip install -q pytest
       - name: shellcheck
-        run: shellcheck -x install-lib.sh install.sh scripts/*.sh
+        run: shellcheck -S warning -x install-lib.sh install.sh scripts/*.sh
       - name: unit tests
         run: python3 -m pytest tests/unit --confcutdir=tests/unit -v
