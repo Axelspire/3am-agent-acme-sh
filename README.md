@@ -102,11 +102,11 @@ Set `SCAN_USE_SCOPE=1` to force the legacy scope path.
 
 ## Updating upstream acme.sh
 
-See **[`UPSTREAM.md`](./UPSTREAM.md)** — `module` (this repo) vs `pin` (GPL archive).
+See **[`UPSTREAM.md`](./UPSTREAM.md)**. Prefer GitHub Actions **propose-pin** → **publish-pin** (A2).
 
 ```bash
+# Break-glass only:
 ./scripts/vendor-pin.sh 3.1.0 --sync-core ../3am-core
-# then fleet agents.acme.sh.pin + customer-deploy apply
 ```
 
 ## Maintainer sync into core publish

@@ -1,0 +1,206 @@
+# Copyright (c) 2026 Axelspire Inc. All rights reserved.
+# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+#
+# Phase B: promote a frozen A2 candidate prerelease into draft PRs for
+# agent-repo main (if needed), 3am-core publish tree, and fleet pin.
+# Does not apply customer-deploy.
+
+name: publish-pin
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: Candidate prerelease tag (e.g. candidate-v0.1.1+pin-3.1.0)
+        required: true
+        type: string
+
+# Optional environment with required reviewers — create "agent-pin-publish"
+# in repo Settings → Environments. If missing, job still runs (no gate).
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: agent-pin-publish
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require PUBLISH_PAT for cross-repo PRs
+        env:
+          PUBLISH_PAT: ${{ secrets.PUBLISH_PAT }}
+        run: |
+          if [ -z "${PUBLISH_PAT}" ]; then
+            echo "::error::Set repo secret PUBLISH_PAT (fine-grained PAT with contents+PRs on 3am-core and 3am-deployments)."
+            exit 1
+          fi
+
+      - name: Download candidate release (frozen bytes)
+        id: cand
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.candidate_ref }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/candidate
+          gh release download "${TAG}" -R "${{ github.repository }}" -D /tmp/candidate
+          PIN=$(tr -d '[:space:]' < /tmp/candidate/UPSTREAM_PIN.txt)
+          DIGEST=$(tr -d '[:space:]' < /tmp/candidate/ARCHIVE_SHA256.txt)
+          MODULE=$(tr -d '[:space:]' < /tmp/candidate/MODULE)
+          GOT=$(sha256sum "/tmp/candidate/archive/${PIN}.tar.gz" | awk '{print $1}')
+          [ "${GOT}" = "${DIGEST}" ] || {
+            echo "::error::candidate archive digest mismatch"
+            exit 1
+          }
+          echo "pin=${PIN}" >> "$GITHUB_OUTPUT"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "module=${MODULE}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          ls -la /tmp/candidate /tmp/candidate/archive /tmp/candidate/tags /tmp/candidate/companion
+
+      - name: Merge agent metadata PR / land on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PIN: ${{ steps.cand.outputs.pin }}
+          TAG: ${{ steps.cand.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          branch="pin/${PIN}"
+          git fetch origin main
+          git checkout -B "${branch}" origin/main
+          cp -f /tmp/candidate/pin pin
+          cp -f /tmp/candidate/manifest.json manifest.json
+          cp -f /tmp/candidate/MODULE MODULE
+          mkdir -p tags
+          cp -f "/tmp/candidate/tags/${PIN}" "tags/${PIN}"
+          git add pin "tags/${PIN}" manifest.json MODULE
+          if ! git diff --cached --quiet; then
+            git commit -m "Vendor upstream acme.sh pin ${PIN} (publish ${TAG})"
+            git push -u origin "${branch}" --force
+          fi
+          # Open or update PR and merge
+          existing=$(gh pr list --head "${branch}" --json number,state --jq '.[0].number // empty')
+          if [ -z "${existing}" ]; then
+            gh pr create --base main --head "${branch}" \
+              --title "Vendor upstream acme.sh pin ${PIN}" \
+              --body "Promoted from candidate \`${TAG}\` by **publish-pin**."
+            existing=$(gh pr list --head "${branch}" --json number --jq '.[0].number')
+          else
+            gh pr ready "${existing}" || true
+          fi
+          gh pr merge "${existing}" --squash --delete-branch || {
+            echo "::warning::Could not auto-merge agent PR #${existing}; merge manually then continue core/fleet PRs."
+          }
+
+      - name: Open draft PR on 3am-core
+        env:
+          GH_TOKEN: ${{ secrets.PUBLISH_PAT }}
+          PIN: ${{ steps.cand.outputs.pin }}
+          TAG: ${{ steps.cand.outputs.tag }}
+          DIGEST: ${{ steps.cand.outputs.digest }}
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/Axelspire/3am-core.git" /tmp/3am-core
+          cd /tmp/3am-core
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git checkout -B "agent/acme-sh-pin-${PIN}" origin/main
+          mkdir -p deploy/agents/acmesh/archive deploy/agents/acmesh/tags
+          cp -f /tmp/candidate/pin deploy/agents/acmesh/pin
+          cp -f /tmp/candidate/manifest.json deploy/agents/acmesh/manifest.json
+          cp -f "/tmp/candidate/tags/${PIN}" "deploy/agents/acmesh/tags/${PIN}"
+          cp -f "/tmp/candidate/archive/${PIN}.tar.gz" "deploy/agents/acmesh/archive/${PIN}.tar.gz"
+          git add \
+            deploy/agents/acmesh/pin \
+            deploy/agents/acmesh/manifest.json \
+            "deploy/agents/acmesh/tags/${PIN}" \
+            "deploy/agents/acmesh/archive/${PIN}.tar.gz"
+          git commit -m "Publish acme.sh upstream pin ${PIN} to agent/acme.sh"
+          git push -u origin "agent/acme-sh-pin-${PIN}" --force
+          body="Synced from \`${TAG}\` via **publish-pin** (frozen digest \`${DIGEST}\`).
+
+          Pair with fleet \`agents.acme.sh.pin: \"${PIN}\"\` then customer-deploy apply."
+          existing=$(gh pr list -R Axelspire/3am-core --head "agent/acme-sh-pin-${PIN}" --json number --jq '.[0].number // empty')
+          if [ -n "${existing}" ]; then
+            gh pr edit -R Axelspire/3am-core "${existing}" --title "Publish acme.sh upstream pin ${PIN}" --body "${body}"
+            gh pr ready -R Axelspire/3am-core "${existing}" --undo || true
+          else
+            gh pr create -R Axelspire/3am-core --draft --base main --head "agent/acme-sh-pin-${PIN}" \
+              --title "Publish acme.sh upstream pin ${PIN}" \
+              --body "${body}"
+          fi
+          echo "CORE_PR=$(gh pr list -R Axelspire/3am-core --head "agent/acme-sh-pin-${PIN}" --json url --jq '.[0].url')" >> "$GITHUB_ENV"
+
+      - name: Open draft PR on 3am-deployments (fleet pin)
+        env:
+          GH_TOKEN: ${{ secrets.PUBLISH_PAT }}
+          PIN: ${{ steps.cand.outputs.pin }}
+          MODULE: ${{ steps.cand.outputs.module }}
+          TAG: ${{ steps.cand.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/Axelspire/3am-deployments.git" /tmp/3am-deployments
+          cd /tmp/3am-deployments
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git checkout -B "agents/acme-sh-pin-${PIN}" origin/main
+          PIN="${PIN}" MODULE="${MODULE}" python3 <<'PY'
+          from pathlib import Path
+          import os
+          pin = os.environ["PIN"]
+          module = os.environ["MODULE"]
+          p = Path("_common/fleet-baseline.yaml")
+          lines = p.read_text().splitlines()
+          out = []
+          in_acme = False
+          for line in lines:
+              if line.strip() == "acme.sh:":
+                  in_acme = True
+              elif in_acme and line[:2] == "  " and line[2:3] != " " and line.strip().endswith(":"):
+                  in_acme = False
+              if in_acme and line.startswith("    pin:"):
+                  line = f'    pin: "{pin}"'
+              elif in_acme and line.startswith("    module:"):
+                  line = f"    module: {module}"
+              out.append(line)
+          p.write_text("\n".join(out) + "\n")
+          print(p.read_text())
+          PY
+          git add _common/fleet-baseline.yaml
+          if git diff --cached --quiet; then
+            echo "Fleet pin already ${PIN}"
+          else
+            git commit -m "Fleet: agents.acme.sh.pin ${PIN}"
+            git push -u origin "agents/acme-sh-pin-${PIN}" --force
+            body="Fleet pin **${PIN}** (module ${MODULE}) from candidate \`${TAG}\`.
+
+          Merge after core publish PR; then customer-deploy apply."
+            existing=$(gh pr list -R Axelspire/3am-deployments --head "agents/acme-sh-pin-${PIN}" --json number --jq '.[0].number // empty')
+            if [ -n "${existing}" ]; then
+              gh pr edit -R Axelspire/3am-deployments "${existing}" --title "Fleet: agents.acme.sh.pin ${PIN}" --body "${body}"
+              gh pr ready -R Axelspire/3am-deployments "${existing}" --undo || true
+            else
+              gh pr create -R Axelspire/3am-deployments --draft --base main --head "agents/acme-sh-pin-${PIN}" \
+                --title "Fleet: agents.acme.sh.pin ${PIN}" \
+                --body "${body}"
+            fi
+          fi
+          echo "FLEET_PR=$(gh pr list -R Axelspire/3am-deployments --head "agents/acme-sh-pin-${PIN}" --json url --jq '.[0].url')" >> "$GITHUB_ENV"
+
+      - name: Summary
+        env:
+          PIN: ${{ steps.cand.outputs.pin }}
+          TAG: ${{ steps.cand.outputs.tag }}
+        run: |
+          {
+            echo "## publish-pin complete"
+            echo "- candidate: \`${TAG}\`"
+            echo "- pin: \`${PIN}\`"
+            echo "- core PR: ${CORE_PR:-"(see job log)"}"
+            echo "- fleet PR: ${FLEET_PR:-"(see job log)"}"
+            echo ""
+            echo "Merge order: agent (if open) → core (+ tag/bump modules.core if required) → fleet → customer-deploy apply → ops one-curl."
+          } >> "$GITHUB_STEP_SUMMARY"

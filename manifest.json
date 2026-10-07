@@ -1,7 +1,7 @@
 {
   "name": "acme.sh",
   "title": "acme.sh + datasink scan companion",
-  "module": "v0.1.1",
+  "module": "v0.2.0",
   "pin": "3.1.0",
   "companion": "1.1.0",
   "entrypoint": "acme.sh",

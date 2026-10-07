@@ -1,0 +1,30 @@
+# Copyright (c) 2026 Axelspire Inc. All rights reserved.
+# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          python3 -m pip install -q pytest
+      - name: shellcheck
+        run: shellcheck -x install-lib.sh install.sh scripts/*.sh
+      - name: unit tests
+        run: python3 -m pytest tests/unit --confcutdir=tests/unit -v
