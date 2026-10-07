@@ -1,0 +1,190 @@
+# Copyright (c) 2026 Axelspire Inc. All rights reserved.
+# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+#
+# Phase A (A2): vendor an upstream acme.sh pin, test, publish a GitHub
+# *prerelease* candidate bundle, open a draft metadata PR. Does not touch
+# customer S3 / fleet.
+
+name: propose-pin
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_pin:
+        description: Upstream acme.sh git tag (e.g. 3.1.0)
+        required: true
+        type: string
+      bump_module:
+        description: Also bump MODULE patch (installer/companion changed)
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  propose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck cron
+          python3 -m pip install -q pytest
+          sudo service cron start || true
+
+      - name: Validate pin
+        env:
+          PIN: ${{ inputs.upstream_pin }}
+        run: |
+          case "${PIN}" in
+            *[!A-Za-z0-9._-]*|""|.*|*/*|*..*)
+              echo "::error::invalid upstream_pin=${PIN}"
+              exit 1
+              ;;
+          esac
+
+      - name: Optional MODULE bump
+        if: ${{ inputs.bump_module }}
+        run: |
+          cur=$(tr -d '[:space:]' < MODULE)
+          # v0.1.1 → v0.1.2 (patch only)
+          base=${cur#v}
+          major=${base%%.*}
+          rest=${base#*.}
+          minor=${rest%%.*}
+          patch=${rest#*.}
+          patch=$((patch + 1))
+          next="v${major}.${minor}.${patch}"
+          printf '%s\n' "${next}" > MODULE
+          python3 - <<PY
+          import json
+          from pathlib import Path
+          m = json.loads(Path("manifest.json").read_text())
+          m["module"] = Path("MODULE").read_text().strip()
+          Path("manifest.json").write_text(json.dumps(m, indent=2) + "\n")
+          print("MODULE", m["module"])
+          PY
+
+      - name: Vendor upstream pin
+        run: ./scripts/vendor-pin.sh "${{ inputs.upstream_pin }}"
+
+      - name: shellcheck
+        run: shellcheck -x install-lib.sh install.sh scripts/*.sh
+
+      - name: unit tests
+        run: python3 -m pytest tests/unit --confcutdir=tests/unit -v
+
+      - name: Build candidate bundle
+        id: bundle
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/build-candidate-bundle.sh
+          tag=$(tr -d '[:space:]' < dist/candidate-bundle/CANDIDATE_TAG.txt)
+          echo "candidate_tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "pin=$(tr -d '[:space:]' < pin)" >> "$GITHUB_OUTPUT"
+          echo "digest=$(tr -d '[:space:]' < tags/${{ inputs.upstream_pin }})" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke candidate (local HTTP install)
+        run: ./scripts/smoke-candidate.sh
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-bundle-${{ steps.bundle.outputs.pin }}
+          path: dist/candidate-bundle/
+          retention-days: 14
+
+      - name: Create prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.bundle.outputs.candidate_tag }}
+          PIN: ${{ steps.bundle.outputs.pin }}
+          DIGEST: ${{ steps.bundle.outputs.digest }}
+        run: |
+          set -euo pipefail
+          # Recreate tag/release if re-run
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            git push origin ":refs/tags/${TAG}" || true
+            gh release delete "${TAG}" --yes || true
+            git tag -d "${TAG}" || true
+          fi
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git tag -a "${TAG}" -m "Candidate pin ${PIN}"
+          git push origin "${TAG}"
+          (
+            cd dist/candidate-bundle
+            gh release create "${TAG}" \
+              --prerelease \
+              --title "${TAG}" \
+              --notes "$(cat <<EOF
+          Candidate upstream pin **${PIN}** (A2 — not customer-facing).
+
+          - archive sha256: \`${DIGEST}\`
+          - Smoke: local HTTP install in CI passed
+          - Next: run **publish-pin** with \`candidate_ref=${TAG}\` after LGTM
+
+          Test locally:
+          \`\`\`bash
+          gh release download '${TAG}' -R ${{ github.repository }} -D /tmp/cand
+          cd /tmp/cand && python3 -m http.server 8765 &
+          THREEAM_AGENT_BASE=http://127.0.0.1:8765 THREEAM_SCAN_SERVER=https://scan.smoke.invalid \\
+            ACME_EMAIL=smoke@example.invalid ./install.sh
+          \`\`\`
+          EOF
+          )" \
+              install.sh INSTALL.md pin MODULE manifest.json ARCHIVE_SHA256.txt \
+              CANDIDATE_TAG.txt UPSTREAM_PIN.txt \
+              "archive/${PIN}.tar.gz" "tags/${PIN}" \
+              companion/3am-scan.sh companion/VERSION companion/deploy/3am_scan.sh
+          )
+
+      - name: Open draft metadata PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PIN: ${{ steps.bundle.outputs.pin }}
+          TAG: ${{ steps.bundle.outputs.candidate_tag }}
+        run: |
+          set -euo pipefail
+          branch="pin/${PIN}"
+          mkdir -p /tmp/propose-meta/tags
+          cp -f pin manifest.json MODULE /tmp/propose-meta/
+          cp -f "tags/${PIN}" "/tmp/propose-meta/tags/${PIN}"
+
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git fetch origin main
+          git checkout -B "${branch}" origin/main
+          cp -f /tmp/propose-meta/pin pin
+          cp -f /tmp/propose-meta/manifest.json manifest.json
+          cp -f /tmp/propose-meta/MODULE MODULE
+          mkdir -p tags
+          cp -f "/tmp/propose-meta/tags/${PIN}" "tags/${PIN}"
+          git add pin "tags/${PIN}" manifest.json MODULE
+          if git diff --cached --quiet; then
+            echo "No metadata changes vs main (pin already on main)"
+            exit 0
+          fi
+          git commit -m "Vendor upstream acme.sh pin ${PIN} (candidate ${TAG})"
+          git push -u origin "${branch}" --force
+          body="Draft from **propose-pin**. Candidate prerelease: \`${TAG}\`.
+
+          Promote with **publish-pin** (\`candidate_ref=${TAG}\`) after LGTM."
+          existing=$(gh pr list --head "${branch}" --json number --jq '.[0].number // empty')
+          if [ -n "${existing}" ]; then
+            gh pr edit "${existing}" --title "Vendor upstream acme.sh pin ${PIN}" --body "${body}"
+            gh pr ready "${existing}" --undo || true
+          else
+            gh pr create --draft --base main --head "${branch}" \
+              --title "Vendor upstream acme.sh pin ${PIN}" \
+              --body "${body}"
+          fi
