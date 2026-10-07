@@ -100,18 +100,27 @@ Set `SCAN_USE_SCOPE=1` to force the legacy scope path.
 - **`3am-scan.sh`** is Axelspire proprietary (repo `COPYRIGHT`).
 - **`deploy/3am_scan.sh`** is a thin launcher only (env map + exec); still shipped outside the GPL archive for v1 clarity.
 
+## Updating upstream acme.sh
+
+See **[`UPSTREAM.md`](./UPSTREAM.md)** — `module` (this repo) vs `pin` (GPL archive).
+
+```bash
+./scripts/vendor-pin.sh 3.1.0 --sync-core ../3am-core
+# then fleet agents.acme.sh.pin + customer-deploy apply
+```
+
 ## Maintainer sync into core publish
 
 ```bash
-# From 3am-datasink:
-./agents/acme-sh-scan/assemble-install.sh > ../3am-core/deploy/agents/acmesh/install.sh
-cp agents/acme-sh-scan/3am-scan.sh ../3am-core/deploy/agents/acmesh/companion/
-cp agents/acme-sh-scan/deploy/3am_scan.sh ../3am-core/deploy/agents/acmesh/companion/deploy/
+./assemble-install.sh > ../3am-core/deploy/agents/acmesh/install.sh
+cp 3am-scan.sh ../3am-core/deploy/agents/acmesh/companion/
+cp deploy/3am_scan.sh ../3am-core/deploy/agents/acmesh/companion/deploy/
+# pin / archive / tags via scripts/vendor-pin.sh --sync-core
 ```
 
 ## Tests
 
 ```bash
 python3 -m pytest tests/unit/test_acme_sh_install_lib.py --confcutdir=tests/unit -v
-shellcheck -x agents/acme-sh-scan/install-lib.sh agents/acme-sh-scan/install.sh
+shellcheck -x install-lib.sh install.sh
 ```
