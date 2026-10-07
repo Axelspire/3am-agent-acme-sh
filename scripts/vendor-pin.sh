@@ -121,4 +121,6 @@ if [ -n "${SYNC_CORE}" ]; then
   echo "vendor-pin: next: PR 3am-core, bump fleet agents.acme.sh.pin + core:, apply"
 fi
 
-echo "vendor-pin: done (archive/*.tar.gz is gitignored — commit pin, tags/${PIN}, manifest.json)"
+echo "vendor-pin: done"
+echo "vendor-pin: commit in this repo: pin, tags/${PIN}, manifest.json"
+echo "vendor-pin: the .tar.gz stays local (gitignored); --sync-core copied it into 3am-core for deploy/S3"
