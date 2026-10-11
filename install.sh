@@ -179,8 +179,8 @@ EOF
   fi
 
   threeam_info "deploy-hook: 3am_scan (auto via wrapper; Le_DeployHook stamped on domain confs)"
-  threeam_info "scheduling: acme.sh --cron (renew→hook) + daily 3am-scan wake"
-  threeam_install_daily_scan_cron "${ENV_FILE}" "${COMP_DEST}"
+  threeam_info "scheduling: one crontab line — acme.sh --cron (renew→hook + companion wake)"
+  threeam_remove_legacy_scan_cron
   threeam_info "done"
 }
 

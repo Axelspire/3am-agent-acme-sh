@@ -33,7 +33,8 @@ What it does:
 5. Writes `~/.acme.sh/3am-scan.env` with `SCAN_SERVER` + `THREEAM_SCAN` (no secrets).
 6. Wraps `acme.sh` so `Le_DeployHook=3am_scan` is **always** stamped and auto-deploy
    runs after issue/sign-csr (CORE-64 — no manual `--deploy-hook` required).
-7. Installs a daily companion wake cron (sources `3am-scan.env`; skips until a cert exists).
+7. Single crontab line: wrapper `--cron` renews, runs the hook, and wakes the companion
+   (CORE-65 — no second complex wake cron).
 
 ```bash
 # After client cert exists (CN = agent.<uuid>):

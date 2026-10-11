@@ -12,7 +12,7 @@ upstream acme.sh archive **and** the proprietary scan companion / thin deploy-ho
 | `openssl` | recommended | CSR / issue / companion |
 | `socat` | optional | Only for acme.sh standalone HTTP-01 |
 
-Our wrapper passes `--force` to `acme.sh --install` (fresh and upgrade) so one-curl still succeeds on headless hosts that lack crontab (CORE-64). Install **cron** on real agents anyway — otherwise renew jobs and our daily scan wake are never registered.
+Our wrapper passes `--force` to `acme.sh --install` (fresh and upgrade) so one-curl still succeeds on headless hosts that lack crontab (CORE-64). Install **cron** on real agents anyway — otherwise the single renew/scan job is never registered.
 
 ```bash
 # Debian/Ubuntu example (before or after one-curl)
@@ -48,33 +48,24 @@ after a successful issue/sign-csr, runs `--deploy --deploy-hook 3am_scan` itself
 `--deploy` without a hook also gets `3am_scan` injected. Re-running one-curl
 re-wraps and re-stamps existing confs.
 
-## Scheduling (cron → renew → our hook)
+## Scheduling (one cron line)
 
-Two layers (CORE-64):
+**One crontab line** (from `acme.sh --install` — CORE-65; no second companion wake):
 
-1. **Upstream renew cron** (from `acme.sh --install`):
-   ```text
-   acme.sh --cron --home ~/.acme.sh
-   ```
-   (This is our wrapper on PATH / in `~/.acme.sh`.) When a cert is due, upstream
-   renews it and loads `deploy/3am_scan.sh` because `Le_DeployHook` was stamped
-   at install / issue time. The thin hook sources `3am-scan.env` itself (cron does not).
+```text
+acme.sh --cron --home ~/.acme.sh
+```
 
-2. **Daily companion wake** (installed by one-curl):
-   ```text
-   # 3am-scan daily wake (CORE-64)
-   22 5 * * * … ; . "~/.acme.sh/3am-scan.env" && ls "~/.acme.sh"/*_ecc/*.cer … && 3am-scan.sh
-   ```
-   Runs the companion even when renew is not due (eyes ClientAuth is short-lived;
-   scan should not wait for renew alone). Skips until at least one leaf cert exists.
-   Disable with `THREEAM_SKIP_SCAN_CRON=1`.
+That path is our wrapper: source `3am-scan.env` → stamp `Le_DeployHook=3am_scan` →
+upstream renew → thin hook on renew → **also** wake the companion when a leaf cert
+exists (even if renew was not due). Re-running one-curl strips any legacy
+`# 3am-scan daily wake (CORE-64)` dual-cron line.
 
-**Verify hook is always registered after one-curl / enroll:**
+**Verify after one-curl / enroll:**
 
 ```bash
-# Wrapper present:
 grep -q '3am-acme-wrapper CORE-64' ~/.acme.sh/acme.sh && echo wrapped_ok
-crontab -l | grep -E 'acme.sh --cron|3am-scan'
+crontab -l | grep 'acme.sh --cron'
 # After any issue/sign-csr (or re-run one-curl):
 grep Le_DeployHook ~/.acme.sh/agent.*/agent.*.conf
 # Force deploy path (does not wait for renew):
@@ -110,7 +101,7 @@ Scan failures are logged but do **not** fail renew (`hook` returns 0).
 | `THREEAM_ACME_HOME` | Override acme home (default `~/.acme.sh`) |
 | `THREEAM_SKIP_ACME=1` | Companion/hook only |
 | `THREEAM_DIGEST_OPTIONAL=1` | Warn instead of hard-fail on tags mismatch |
-| `THREEAM_SKIP_SCAN_CRON=1` | Do not install daily companion wake cron |
+| `THREEAM_SKIP_SCAN_CRON=1` | Skip stripping legacy dual-cron wake lines |
 
 ## Downloads
 

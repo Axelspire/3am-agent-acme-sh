@@ -338,6 +338,22 @@ if [ "\${_is_deploy}" = "1" ] && [ "\${_has_deploy_hook}" = "0" ]; then
   set -- "\$@" --deploy-hook 3am_scan
 fi
 
+_wake_companion() {
+  # After --cron: run scan even when renew was not due (short-lived agent certs).
+  # No second crontab line — CORE-65 / single-entrypoint direction.
+  _scan="\${THREEAM_SCAN:-}"
+  if [ -z "\${_scan}" ] || [ ! -x "\${_scan}" ]; then
+    if [ -x "\${ACME_HOME}/deploy/3am-scan.sh" ]; then
+      _scan="\${ACME_HOME}/deploy/3am-scan.sh"
+    else
+      return 0
+    fi
+  fi
+  # Skip until a leaf cert exists (pre-enroll hosts).
+  ls "\${ACME_HOME}"/*_ecc/*.cer >/dev/null 2>&1 || ls "\${ACME_HOME}"/*/*.cer >/dev/null 2>&1 || return 0
+  "\${_scan}" >/dev/null 2>&1 || true
+}
+
 "\${UPSTREAM}" --home "\${ACME_HOME}" "\$@"
 _rc=\$?
 
@@ -359,72 +375,56 @@ if [ "\${_rc}" -eq 0 ] && { [ "\${_is_issue}" = "1" ] || [ "\${_is_signcsr}" = "
   fi
 fi
 
+# Single crontab line: upstream --cron → our wrapper also wakes companion.
+if [ "\${_is_cron}" = "1" ]; then
+  _wake_companion
+fi
+
 exit "\${_rc}"
 EOF
   chmod +x "${_real}"
 }
 
 threeam_scan_cron_marker() {
+  # Legacy marker from CORE-64 dual-cron; used only to strip old lines.
   printf '%s' '# 3am-scan daily wake (CORE-64)'
 }
 
-threeam_daily_scan_cron_line() {
-  # Args: env_file companion_path
-  # Skip when no leaf cert yet so pre-enroll hosts do not spam errors.
-  _env="$1"
-  _scan="$2"
-  _home=$(dirname "${_env}")
-  # shellcheck disable=SC2016
-  printf '22 5 * * * %s; . "%s" && ls "%s"/*_ecc/*.cer >/dev/null 2>&1 && "%s" >/dev/null 2>&1' \
-    "$(threeam_scan_cron_marker)" "${_env}" "${_home}" "${_scan}"
-}
-
-threeam_merge_scan_cron() {
-  # Args: env_file companion_path; existing crontab on stdin → stdout with our
-  # line replaced/appended. Pure text transform for unit tests (no crontab).
-  _env="$1"
-  _scan="$2"
+threeam_strip_legacy_scan_cron() {
+  # Remove the CORE-64 dual-cron wake line if present; keep upstream --cron only.
+  # stdin crontab → stdout without our legacy marker lines.
   _marker=$(threeam_scan_cron_marker)
-  _line=$(threeam_daily_scan_cron_line "${_env}" "${_scan}")
   while IFS= read -r _row || [ -n "${_row}" ]; do
     case "${_row}" in
       *"${_marker}"*) continue ;;
     esac
-    [ -n "${_row}" ] || continue
     printf '%s\n' "${_row}"
   done
-  printf '%s\n' "${_line}"
 }
 
-threeam_install_daily_scan_cron() {
-  # Install/replace daily companion wake in the user crontab (CORE-64).
-  # Upstream acme.sh --cron renews + runs Le_DeployHook=3am_scan after renew;
-  # this wake runs the companion even when renew is not due.
-  # Set THREEAM_SKIP_SCAN_CRON=1 to skip.
-  _env="$1"
-  _scan="$2"
+threeam_remove_legacy_scan_cron() {
+  # Idempotent cleanup of the complex daily wake cron (operator feedback / CORE-65).
   if [ "${THREEAM_SKIP_SCAN_CRON:-0}" = "1" ]; then
-    threeam_info "THREEAM_SKIP_SCAN_CRON=1 — not installing daily 3am-scan cron"
     return 0
   fi
   if ! command -v crontab >/dev/null 2>&1; then
-    threeam_info "crontab missing — skip daily 3am-scan wake (install cron for renew + scan)"
     return 0
   fi
-  _tmp=$(mktemp "${TMPDIR:-/tmp}/3am-scan-cron.XXXXXX")
   _existing=$(crontab -l 2>/dev/null || true)
-  if [ -n "${_existing}" ]; then
-    printf '%s\n' "${_existing}" | threeam_merge_scan_cron "${_env}" "${_scan}" > "${_tmp}"
+  [ -n "${_existing}" ] || return 0
+  case "${_existing}" in
+    *"$(threeam_scan_cron_marker)"*) ;;
+    *) return 0 ;;
+  esac
+  _tmp=$(mktemp "${TMPDIR:-/tmp}/3am-scan-cron.XXXXXX")
+  printf '%s\n' "${_existing}" | threeam_strip_legacy_scan_cron > "${_tmp}"
+  if [ -s "${_tmp}" ]; then
+    crontab "${_tmp}" || true
   else
-    threeam_daily_scan_cron_line "${_env}" "${_scan}" > "${_tmp}"
+    crontab -r 2>/dev/null || crontab /dev/null 2>/dev/null || true
   fi
-  crontab "${_tmp}" || {
-    rm -f "${_tmp}"
-    threeam_info "warning: could not install daily 3am-scan crontab"
-    return 0
-  }
   rm -f "${_tmp}"
-  threeam_info "installed daily 3am-scan wake cron (sources 3am-scan.env; skips until a cert exists)"
+  threeam_info "removed legacy daily 3am-scan wake cron (scan runs from acme.sh --cron wrapper)"
 }
 
 threeam_die() { echo "3am-agent-install: ERROR: $*" >&2; exit 1; }

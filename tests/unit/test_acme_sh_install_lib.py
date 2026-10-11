@@ -444,33 +444,21 @@ class TestInstallDryRunMockCurl:
         assert (acme_home / "acme.sh.upstream").is_file()
 
 
-class TestDailyScanCron:
-    def test_cron_line_has_marker_and_env(self):
-        r = _run_lib(
-            'threeam_daily_scan_cron_line "/tmp/h/3am-scan.env" "/tmp/h/deploy/3am-scan.sh"; echo'
-        )
-        assert r.returncode == 0
-        line = r.stdout.strip()
-        assert "3am-scan daily wake (CORE-64)" in line
-        assert '. "/tmp/h/3am-scan.env"' in line
-        assert "/tmp/h/deploy/3am-scan.sh" in line
-        assert "*_ecc/*.cer" in line
-
-    def test_merge_replaces_prior_marker(self):
+class TestLegacyScanCronStrip:
+    def test_strip_removes_dual_cron_keeps_upstream(self):
         r = _run_lib(
             textwrap.dedent(
                 """\
-                printf '%s\\n' '0 1 * * * /old' '# 3am-scan daily wake (CORE-64); stale' \
-                  | threeam_merge_scan_cron "/e" "/s"
+                printf '%s\\n' '0 1 * * * acme.sh --cron' \
+                  '# 3am-scan daily wake (CORE-64); . /e && /s' \
+                  | threeam_strip_legacy_scan_cron
                 """
             )
         )
         assert r.returncode == 0
         out = r.stdout
-        assert "0 1 * * * /old" in out
-        assert out.count("3am-scan daily wake (CORE-64)") == 1
-        assert "stale" not in out
-        assert '. "/e"' in out
+        assert "acme.sh --cron" in out
+        assert "3am-scan daily wake" not in out
 
 
 class TestEnsureDeployHook:
@@ -591,3 +579,28 @@ class TestWriteAcmeWrapper:
         assert r.returncode == 0, r.stderr
         assert r.stdout.strip().endswith("1")
         assert "REAL" in (home / "acme.sh.upstream").read_text()
+
+    def test_cron_wakes_companion_when_cert_exists(self, tmp_path):
+        home = tmp_path / ".acme.sh"
+        deploy = home / "deploy"
+        deploy.mkdir(parents=True)
+        (home / "acme.sh").write_text("#!/bin/sh\necho UP\n")
+        (home / "acme.sh").chmod(0o755)
+        scan_log = tmp_path / "scan.log"
+        (deploy / "3am-scan.sh").write_text(f"#!/bin/sh\necho SCANNED >> '{scan_log}'\n")
+        (deploy / "3am-scan.sh").chmod(0o755)
+        ecc = home / "agent.demo_ecc"
+        ecc.mkdir()
+        (ecc / "agent.demo.cer").write_text("cer\n")
+        (home / "3am-scan.env").write_text(
+            f'export THREEAM_SCAN="{deploy / "3am-scan.sh"}"\n'
+            f'export THREEAM_ACME_HOME="{home}"\n'
+        )
+        r = _run_lib(
+            f'threeam_write_acme_wrapper "{home}" && '
+            f'HOME="{tmp_path}" "{home}/acme.sh" --cron',
+            env={"HOME": str(tmp_path)},
+        )
+        assert r.returncode == 0, r.stderr
+        assert scan_log.is_file()
+        assert "SCANNED" in scan_log.read_text()
