@@ -1,9 +1,9 @@
 {
   "name": "acme.sh",
   "title": "acme.sh + datasink scan companion",
-  "module": "v0.2.0",
+  "module": "v0.2.1",
   "pin": "3.1.1",
-  "companion": "1.1.0",
+  "companion": "1.1.1",
   "entrypoint": "acme.sh",
   "layout": "flat-or-nested",
   "gpl_archive": true,

@@ -5,3 +5,5 @@ __pycache__/
 *.tar.gz
 .DS_Store
 dist/
+install.assembled.sh
+install.published.sh

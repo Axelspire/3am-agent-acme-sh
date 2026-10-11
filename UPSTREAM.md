@@ -14,21 +14,23 @@ curl -fsSL https://axel.<customer>.3am.global/root/agent/acme.sh/install.sh | sh
 
 Do **not** use `acme.sh --upgrade`.
 
-## Two version numbers
+## Versioning (CORE-65 target — locked)
 
-| Name | Example | What it is |
-|---|---|---|
-| **module** | `v0.2.0` | *Our* wrapper — this git repo’s `MODULE` / tag |
-| **pin** | `3.1.1` | *Upstream* acme.sh release |
+**Our git tag = upstream acme.sh tag = `pin` = `x.y.z`.** No separate `MODULE=v0.x.y` lineage.
 
-Fleet (`3am-deployments` `_common/fleet-baseline.yaml`):
+```text
+our git tag  ==  pin file  ==  archive/<x.y.z>.tar.gz  ==  tags/<x.y.z>  ==  fleet pin
+```
+
+When upstream tags `3.1.2`, vendor that archive and tag **this** repo `3.1.2`. Our-only fixes land on `main` and ship with the next upstream tag. Never edit inside the GPL tarball — re-apply wrapper/hook/companion after install.
+
+**Today (transitional):** fleet still has `module: v0.2.1` + `pin: "3.1.1"` until CORE-65 collapses them.
 
 ```yaml
+# Target fleet shape:
 agents:
   acme.sh:
-    module: v0.2.0
-    pin: "3.1.1"
-    companion: "1.1.0"
+    pin: "3.1.1"   # == our git tag == upstream tag
 ```
 
 ---

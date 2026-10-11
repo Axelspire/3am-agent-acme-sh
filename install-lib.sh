@@ -189,6 +189,244 @@ threeam_verify_archive_digest() {
   return 1
 }
 
+# Marker for our daily companion wake line (idempotent crontab edits).
+threeam_acme_wrapper_marker() {
+  printf '%s' '3am-acme-wrapper CORE-64'
+}
+
+threeam_upstream_acme_path() {
+  # $1 = ACME_HOME
+  printf '%s/acme.sh.upstream' "$1"
+}
+
+threeam_ensure_domain_deploy_hook() {
+  # Args: domain.conf path. Ensure Le_DeployHook includes 3am_scan (idempotent).
+  _conf="$1"
+  [ -f "${_conf}" ] || return 0
+  if grep -q "^Le_DeployHook=" "${_conf}" 2>/dev/null; then
+    _cur=$(sed -n 's/^Le_DeployHook=//p' "${_conf}" | head -n1 | tr -d "'\"")
+    case ",${_cur}," in
+      *,3am_scan,*) return 0 ;;
+    esac
+    if [ -n "${_cur}" ]; then
+      _new="${_cur},3am_scan"
+    else
+      _new="3am_scan"
+    fi
+    # portable in-place replace of the Le_DeployHook line
+    _tmp="${_conf}.3am$$"
+    sed "s/^Le_DeployHook=.*/Le_DeployHook='${_new}'/" "${_conf}" > "${_tmp}" && mv "${_tmp}" "${_conf}"
+  else
+    printf "Le_DeployHook='%s'\n" "3am_scan" >> "${_conf}"
+  fi
+}
+
+threeam_ensure_all_deploy_hooks() {
+  # Stamp Le_DeployHook=3am_scan on every domain conf under ACME_HOME.
+  _home="$1"
+  [ -d "${_home}" ] || return 0
+  for _conf in "${_home}"/*/*.conf; do
+    [ -f "${_conf}" ] || continue
+    case "${_conf}" in
+      */account.conf|*/ca.conf) continue ;;
+    esac
+    threeam_ensure_domain_deploy_hook "${_conf}"
+  done
+}
+
+threeam_list_cert_domains() {
+  # Print domain names (basename of *_ecc dirs without _ecc / plain dirs with .cer).
+  _home="$1"
+  for _di in "${_home}"/*/; do
+    [ -d "${_di}" ] || continue
+    _base=$(basename "${_di}")
+    case "${_base}" in
+      ca|dnsapi|deploy|notify|http.header) continue ;;
+    esac
+    _d="${_base%_ecc}"
+    if ls "${_di}${_d}.cer" >/dev/null 2>&1 || ls "${_di}"/*.cer >/dev/null 2>&1; then
+      printf '%s\n' "${_d}"
+    fi
+  done
+}
+
+threeam_write_acme_wrapper() {
+  # Args: ACME_HOME. Moves real acme.sh → acme.sh.upstream and writes wrapper
+  # that sources 3am-scan.env, stamps Le_DeployHook, and auto-deploys after
+  # issue/sign-csr so the hook is ALWAYS in place after one-curl (CORE-64).
+  _home="$1"
+  _real="${_home}/acme.sh"
+  _up=$(threeam_upstream_acme_path "${_home}")
+  _marker=$(threeam_acme_wrapper_marker)
+  [ -f "${_real}" ] || return 1
+  if grep -q "${_marker}" "${_real}" 2>/dev/null; then
+    # Already wrapped; keep existing upstream binary.
+    [ -x "${_up}" ] || return 1
+  else
+    mv "${_real}" "${_up}"
+    chmod +x "${_up}"
+  fi
+  cat > "${_real}" <<EOF
+#!/usr/bin/env sh
+# ${_marker} — rewritten by agent/acme.sh one-curl install; do not edit.
+set -eu
+ACME_HOME="${_home}"
+UPSTREAM="${_up}"
+ENV_FILE="\${ACME_HOME}/3am-scan.env"
+if [ -f "\${ENV_FILE}" ]; then
+  # shellcheck disable=SC1090
+  . "\${ENV_FILE}"
+fi
+export THREEAM_ACME_HOME="\${ACME_HOME}"
+
+_is_issue=0
+_is_signcsr=0
+_is_cron=0
+_is_deploy=0
+_has_deploy_hook=0
+_domain=""
+_prev=""
+for _a in "\$@"; do
+  case "\${_prev}" in
+    -d|--domain) _domain="\${_a}" ;;
+  esac
+  case "\${_a}" in
+    --issue) _is_issue=1 ;;
+    --sign-csr|--signcsr) _is_signcsr=1 ;;
+    --cron) _is_cron=1 ;;
+    --deploy) _is_deploy=1 ;;
+    --deploy-hook) _has_deploy_hook=1 ;;
+  esac
+  _prev="\${_a}"
+done
+
+# Ensure every domain conf will invoke 3am_scan after renew (and before cron).
+threeam_stamp_hooks() {
+  for _conf in "\${ACME_HOME}"/*/*.conf; do
+    [ -f "\${_conf}" ] || continue
+    case "\${_conf}" in
+      */account.conf|*/ca.conf) continue ;;
+    esac
+    if grep -q "^Le_DeployHook=" "\${_conf}" 2>/dev/null; then
+      _cur=\$(sed -n 's/^Le_DeployHook=//p' "\${_conf}" | head -n1 | tr -d "'\\"")
+      case ",\${_cur}," in
+        *,3am_scan,*) ;;
+        *)
+          if [ -n "\${_cur}" ]; then _new="\${_cur},3am_scan"; else _new="3am_scan"; fi
+          _tmp="\${_conf}.3am\$\$"
+          sed "s/^Le_DeployHook=.*/Le_DeployHook='\${_new}'/" "\${_conf}" > "\${_tmp}" && mv "\${_tmp}" "\${_conf}"
+          ;;
+      esac
+    else
+      printf "Le_DeployHook='%s'\\n" "3am_scan" >> "\${_conf}"
+    fi
+  done
+}
+
+if [ "\${_is_cron}" = "1" ] || [ "\${_is_issue}" = "1" ] || [ "\${_is_signcsr}" = "1" ] || [ "\${_is_deploy}" = "1" ]; then
+  threeam_stamp_hooks
+fi
+
+_run_deploy() {
+  _d="\$1"
+  [ -n "\${_d}" ] || return 0
+  "\${UPSTREAM}" --home "\${ACME_HOME}" --deploy -d "\${_d}" --deploy-hook 3am_scan || true
+}
+
+# Inject --deploy-hook when operator uses --deploy without it.
+if [ "\${_is_deploy}" = "1" ] && [ "\${_has_deploy_hook}" = "0" ]; then
+  set -- "\$@" --deploy-hook 3am_scan
+fi
+
+_wake_companion() {
+  # After --cron: run scan even when renew was not due (short-lived agent certs).
+  # No second crontab line — CORE-65 / single-entrypoint direction.
+  _scan="\${THREEAM_SCAN:-}"
+  if [ -z "\${_scan}" ] || [ ! -x "\${_scan}" ]; then
+    if [ -x "\${ACME_HOME}/deploy/3am-scan.sh" ]; then
+      _scan="\${ACME_HOME}/deploy/3am-scan.sh"
+    else
+      return 0
+    fi
+  fi
+  # Skip until a leaf cert exists (pre-enroll hosts).
+  ls "\${ACME_HOME}"/*_ecc/*.cer >/dev/null 2>&1 || ls "\${ACME_HOME}"/*/*.cer >/dev/null 2>&1 || return 0
+  "\${_scan}" >/dev/null 2>&1 || true
+}
+
+"\${UPSTREAM}" --home "\${ACME_HOME}" "\$@"
+_rc=\$?
+
+# issue/sign-csr do not apply --deploy-hook in upstream 3.1.x — force deploy.
+if [ "\${_rc}" -eq 0 ] && { [ "\${_is_issue}" = "1" ] || [ "\${_is_signcsr}" = "1" ]; }; then
+  threeam_stamp_hooks
+  if [ -n "\${_domain}" ]; then
+    _run_deploy "\${_domain}"
+  else
+    for _di in "\${ACME_HOME}"/*/; do
+      [ -d "\${_di}" ] || continue
+      _base=\$(basename "\${_di}")
+      case "\${_base}" in ca|dnsapi|deploy|notify) continue ;; esac
+      _d="\${_base%_ecc}"
+      if ls "\${_di}\${_d}.cer" >/dev/null 2>&1 || ls "\${_di}"/*.cer >/dev/null 2>&1; then
+        _run_deploy "\${_d}"
+      fi
+    done
+  fi
+fi
+
+# Single crontab line: upstream --cron → our wrapper also wakes companion.
+if [ "\${_is_cron}" = "1" ]; then
+  _wake_companion
+fi
+
+exit "\${_rc}"
+EOF
+  chmod +x "${_real}"
+}
+
+threeam_scan_cron_marker() {
+  # Legacy marker from CORE-64 dual-cron; used only to strip old lines.
+  printf '%s' '# 3am-scan daily wake (CORE-64)'
+}
+
+threeam_strip_legacy_scan_cron() {
+  # Remove the CORE-64 dual-cron wake line if present; keep upstream --cron only.
+  # stdin crontab → stdout without our legacy marker lines.
+  _marker=$(threeam_scan_cron_marker)
+  while IFS= read -r _row || [ -n "${_row}" ]; do
+    case "${_row}" in
+      *"${_marker}"*) continue ;;
+    esac
+    printf '%s\n' "${_row}"
+  done
+}
+
+threeam_remove_legacy_scan_cron() {
+  # Idempotent cleanup of the complex daily wake cron (operator feedback / CORE-65).
+  if [ "${THREEAM_SKIP_SCAN_CRON:-0}" = "1" ]; then
+    return 0
+  fi
+  if ! command -v crontab >/dev/null 2>&1; then
+    return 0
+  fi
+  _existing=$(crontab -l 2>/dev/null || true)
+  [ -n "${_existing}" ] || return 0
+  case "${_existing}" in
+    *"$(threeam_scan_cron_marker)"*) ;;
+    *) return 0 ;;
+  esac
+  _tmp=$(mktemp "${TMPDIR:-/tmp}/3am-scan-cron.XXXXXX")
+  printf '%s\n' "${_existing}" | threeam_strip_legacy_scan_cron > "${_tmp}"
+  if [ -s "${_tmp}" ]; then
+    crontab "${_tmp}" || true
+  else
+    crontab -r 2>/dev/null || crontab /dev/null 2>/dev/null || true
+  fi
+  rm -f "${_tmp}"
+  threeam_info "removed legacy daily 3am-scan wake cron (scan runs from acme.sh --cron wrapper)"
+}
+
 threeam_die() { echo "3am-agent-install: ERROR: $*" >&2; exit 1; }
 threeam_info() { echo "3am-agent-install: $*" >&2; }
 

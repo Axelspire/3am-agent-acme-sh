@@ -28,16 +28,20 @@ What it does:
 
 1. Downloads pinned GPL `archive/<pin>.tar.gz` from the same prefix (pristine).
 2. Verifies `tags/<pin>` sha256 (hard-fail unless `THREEAM_DIGEST_OPTIONAL=1`).
-3. Extracts **flat or nested** archive layouts; runs `acme.sh --install` / refresh.
+3. Extracts **flat or nested** archive layouts; runs `acme.sh --install --force` / refresh.
 4. Installs companion + thin deploy-hook under `~/.acme.sh/deploy/` (lib mirror too).
 5. Writes `~/.acme.sh/3am-scan.env` with `SCAN_SERVER` + `THREEAM_SCAN` (no secrets).
+   Sidecar only — original/upstream acme.sh never sources it (wrapper + thin hook do).
+6. Wraps `acme.sh` so `Le_DeployHook=3am_scan` is **always** stamped and auto-deploy
+   runs after issue/sign-csr (CORE-64 — no manual `--deploy-hook` required).
+7. Single crontab line: wrapper `--cron` renews, runs the hook, and wakes the companion
+   (CORE-65 — no second complex wake cron).
 
 ```bash
-# After client cert exists (CN = host_id / agent:<uuid>):
+# After client cert exists (CN = agent.<uuid>):
 . "$HOME/.acme.sh/3am-scan.env"
-acme.sh --deploy -d 'agent:<uuid>' --deploy-hook 3am_scan
-# or at issue time:
-# acme.sh --issue -d 'agent:<uuid>' … --deploy-hook 3am_scan
+acme.sh --deploy -d 'agent.<uuid>'
+# issue/sign-csr also stamp + auto-deploy via the wrapper
 ```
 
 Served layout (`3am-core` root S3 / API GET — public, no auth):
