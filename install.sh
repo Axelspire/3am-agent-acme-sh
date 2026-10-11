@@ -118,13 +118,18 @@ threeam_install_main() {
         )
       fi
     else
+      # Upstream acme.sh refuses --install without crontab unless --force
+      # (renew pre-check). Pass --force on fresh install too (CORE-64).
       threeam_info "installing acme.sh into ${ACME_HOME}"
+      if ! command -v crontab >/dev/null 2>&1 && ! command -v fcrontab >/dev/null 2>&1; then
+        threeam_info "no crontab/fcrontab — using acme.sh --force (upstream); install cron for renew jobs"
+      fi
       (
         cd "${SRC}"
         if [ -n "${ACME_EMAIL:-}" ]; then
-          ./acme.sh --install -m "${ACME_EMAIL}" --home "${ACME_HOME}"
+          ./acme.sh --install -m "${ACME_EMAIL}" --home "${ACME_HOME}" --force
         else
-          ./acme.sh --install --home "${ACME_HOME}"
+          ./acme.sh --install --home "${ACME_HOME}" --force
         fi
       ) || threeam_die "acme.sh --install failed"
     fi
@@ -161,10 +166,21 @@ threeam_install_main() {
 export SCAN_SERVER="${SCAN_SERVER}"
 export THREEAM_SCAN="${COMP_DEST}"
 export THREEAM_LIB_DIR="${LIB_DIR}"
+export THREEAM_ACME_HOME="${ACME_HOME}"
 EOF
   threeam_info "wrote ${ENV_FILE}"
-  threeam_info "source it before issue/renew, or export SCAN_SERVER / THREEAM_SCAN yourself"
-  threeam_info "deploy-hook name: 3am_scan  (acme.sh --deploy-hook 3am_scan)"
+
+  if [ "${THREEAM_SKIP_ACME:-0}" != "1" ] || [ -x "${ACME_HOME}/acme.sh" ] || [ -x "$(threeam_upstream_acme_path "${ACME_HOME}")" ]; then
+    if [ -x "${ACME_HOME}/acme.sh" ] || [ -x "$(threeam_upstream_acme_path "${ACME_HOME}")" ]; then
+      threeam_info "wrapping acme.sh so 3am_scan deploy-hook is always registered"
+      threeam_write_acme_wrapper "${ACME_HOME}" || threeam_info "warning: could not wrap acme.sh"
+      threeam_ensure_all_deploy_hooks "${ACME_HOME}"
+    fi
+  fi
+
+  threeam_info "deploy-hook: 3am_scan (auto via wrapper; Le_DeployHook stamped on domain confs)"
+  threeam_info "scheduling: acme.sh --cron (renew→hook) + daily 3am-scan wake"
+  threeam_install_daily_scan_cron "${ENV_FILE}" "${COMP_DEST}"
   threeam_info "done"
 }
 

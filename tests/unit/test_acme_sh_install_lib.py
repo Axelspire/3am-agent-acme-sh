@@ -26,11 +26,22 @@ def _run_lib(script: str, env: dict | None = None) -> subprocess.CompletedProces
         """
     )
     e = os.environ.copy()
-    # Clear publish defaults for deterministic tests unless caller sets them.
-    e.pop("THREEAM_AGENT_BASE", None)
-    e.pop("THREEAM_INSTALL_URL", None)
-    e.pop("THREEAM_SCAN_SERVER", None)
-    e.pop("THREEAM_AGENT_BASE_DEFAULT", None)
+    # Clear publish / host leftovers for deterministic tests unless caller sets them.
+    for k in (
+        "THREEAM_AGENT_BASE",
+        "THREEAM_INSTALL_URL",
+        "THREEAM_SCAN_SERVER",
+        "THREEAM_AGENT_BASE_DEFAULT",
+        "THREEAM_ACME_HOME",
+        "THREEAM_LIB_DIR",
+        "THREEAM_SCAN",
+        "SCAN_HELPER",
+        "THREEAM_SKIP_ACME",
+        "THREEAM_SKIP_SCAN_CRON",
+        "THREEAM_DIGEST_OPTIONAL",
+        "ACME_EMAIL",
+    ):
+        e.pop(k, None)
     if env:
         e.update(env)
     return subprocess.run(
@@ -211,7 +222,10 @@ class TestDeployHook:
         (tmp_path / "k.pem").write_text("k")
         (tmp_path / "c.pem").write_text("c")
         (tmp_path / "full.pem").write_text("f")
-        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+        e = os.environ.copy()
+        for k in ("THREEAM_ACME_HOME", "THREEAM_LIB_DIR", "THREEAM_SCAN", "SCAN_HELPER", "LE_WORKING_DIR"):
+            e.pop(k, None)
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=e, check=False)
         assert r.returncode == 0
         assert "SCAN_OK" in r.stdout
 
@@ -220,18 +234,21 @@ class TestDeployHook:
             f"""
             set -eu
             . '{HOOK}'
-            unset THREEAM_SCAN SCAN_HELPER THREEAM_LIB_DIR
+            unset THREEAM_SCAN SCAN_HELPER THREEAM_LIB_DIR THREEAM_ACME_HOME LE_WORKING_DIR
             3am_scan_deploy 'd' '{tmp_path}/k' '{tmp_path}/c' '' ''
             echo RC:$?
             """
         )
         (tmp_path / "k").write_text("k")
         (tmp_path / "c").write_text("c")
+        e = {**os.environ, "HOME": str(tmp_path / "nohome")}
+        for k in ("THREEAM_ACME_HOME", "THREEAM_LIB_DIR", "THREEAM_SCAN", "SCAN_HELPER", "LE_WORKING_DIR"):
+            e.pop(k, None)
         r = subprocess.run(
             ["bash", "-c", script],
             capture_output=True,
             text=True,
-            env={**os.environ, "HOME": str(tmp_path / "nohome")},
+            env=e,
             check=False,
         )
         assert r.returncode == 0
@@ -252,7 +269,10 @@ class TestDeployHook:
         )
         (tmp_path / "k").write_text("k")
         (tmp_path / "c").write_text("c")
-        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+        e = os.environ.copy()
+        for k in ("THREEAM_ACME_HOME", "THREEAM_LIB_DIR", "LE_WORKING_DIR"):
+            e.pop(k, None)
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=e, check=False)
         assert r.returncode == 0
         assert "RC:0" in r.stdout
         assert "scan failed" in r.stderr
@@ -384,12 +404,23 @@ class TestInstallDryRunMockCurl:
         (acme_home / "acme.sh").chmod(0o755)
 
         env = os.environ.copy()
+        for k in (
+            "THREEAM_ACME_HOME",
+            "THREEAM_LIB_DIR",
+            "THREEAM_SCAN",
+            "SCAN_HELPER",
+            "THREEAM_AGENT_BASE",
+            "THREEAM_INSTALL_URL",
+            "THREEAM_SCAN_SERVER",
+        ):
+            env.pop(k, None)
         env.update(
             {
                 "PATH": f"{curl_bin}:{env.get('PATH', '')}",
                 "HOME": str(home),
                 "THREEAM_AGENT_BASE": "https://axel.demo.3am.global/root/agent/acme.sh",
                 "THREEAM_SKIP_ACME": "1",
+                "THREEAM_SKIP_SCAN_CRON": "1",
                 "THREEAM_INSTALL_LIB": str(LIB),
             }
         )
@@ -408,3 +439,155 @@ class TestInstallDryRunMockCurl:
         env_body = (acme_home / "3am-scan.env").read_text()
         assert "https://scan.demo.3am.global" in env_body
         assert str(acme_home / "deploy" / "3am-scan.sh") in env_body
+        # Always-on hook: wrapper replaces acme.sh; upstream preserved.
+        assert "3am-acme-wrapper CORE-64" in (acme_home / "acme.sh").read_text()
+        assert (acme_home / "acme.sh.upstream").is_file()
+
+
+class TestDailyScanCron:
+    def test_cron_line_has_marker_and_env(self):
+        r = _run_lib(
+            'threeam_daily_scan_cron_line "/tmp/h/3am-scan.env" "/tmp/h/deploy/3am-scan.sh"; echo'
+        )
+        assert r.returncode == 0
+        line = r.stdout.strip()
+        assert "3am-scan daily wake (CORE-64)" in line
+        assert '. "/tmp/h/3am-scan.env"' in line
+        assert "/tmp/h/deploy/3am-scan.sh" in line
+        assert "*_ecc/*.cer" in line
+
+    def test_merge_replaces_prior_marker(self):
+        r = _run_lib(
+            textwrap.dedent(
+                """\
+                printf '%s\\n' '0 1 * * * /old' '# 3am-scan daily wake (CORE-64); stale' \
+                  | threeam_merge_scan_cron "/e" "/s"
+                """
+            )
+        )
+        assert r.returncode == 0
+        out = r.stdout
+        assert "0 1 * * * /old" in out
+        assert out.count("3am-scan daily wake (CORE-64)") == 1
+        assert "stale" not in out
+        assert '. "/e"' in out
+
+
+class TestEnsureDeployHook:
+    def test_appends_when_missing(self, tmp_path):
+        conf = tmp_path / "agent.example" / "agent.example.conf"
+        conf.parent.mkdir()
+        conf.write_text("Le_Domain='agent.example'\n")
+        r = _run_lib(f'threeam_ensure_domain_deploy_hook "{conf}" && cat "{conf}"')
+        assert r.returncode == 0
+        assert "Le_DeployHook='3am_scan'" in r.stdout
+
+    def test_appends_to_existing_hooks(self, tmp_path):
+        conf = tmp_path / "d" / "d.conf"
+        conf.parent.mkdir()
+        conf.write_text("Le_DeployHook='other'\n")
+        r = _run_lib(f'threeam_ensure_domain_deploy_hook "{conf}" && cat "{conf}"')
+        assert r.returncode == 0
+        assert "Le_DeployHook='other,3am_scan'" in r.stdout
+
+    def test_idempotent_when_already_set(self, tmp_path):
+        conf = tmp_path / "d" / "d.conf"
+        conf.parent.mkdir()
+        conf.write_text("Le_DeployHook='3am_scan'\n")
+        r = _run_lib(f'threeam_ensure_domain_deploy_hook "{conf}" && cat "{conf}"')
+        assert r.returncode == 0
+        assert r.stdout.count("3am_scan") == 1
+
+    def test_ensure_all_stamps_domain_confs(self, tmp_path):
+        home = tmp_path / ".acme.sh"
+        d = home / "agent.uuid_ecc"
+        d.mkdir(parents=True)
+        (d / "agent.uuid.conf").write_text("Le_Domain='agent.uuid'\n")
+        (home / "account.conf").write_text("ACCOUNT=1\n")
+        r = _run_lib(
+            f'threeam_ensure_all_deploy_hooks "{home}" && '
+            f'cat "{d / "agent.uuid.conf"}" && ! grep -q DeployHook "{home / "account.conf"}"'
+        )
+        assert r.returncode == 0
+        assert "Le_DeployHook='3am_scan'" in r.stdout
+
+
+class TestWriteAcmeWrapper:
+    def test_moves_upstream_and_stamps_on_cron(self, tmp_path):
+        home = tmp_path / ".acme.sh"
+        home.mkdir()
+        upstream = home / "acme.sh"
+        # Fake upstream records argv and creates a domain conf on --issue.
+        upstream.write_text(
+            textwrap.dedent(
+                """\
+                #!/bin/sh
+                set -eu
+                echo "UP:$*" >> "${HOME}/upstream.log"
+                # Simulate issue creating a domain dir + conf without Le_DeployHook.
+                _d=""
+                _prev=""
+                for _a in "$@"; do
+                  case "${_prev}" in -d|--domain) _d="${_a}" ;; esac
+                  _prev="${_a}"
+                done
+                if [ -n "${_d}" ]; then
+                  mkdir -p "${THREEAM_ACME_HOME:-$HOME/.acme.sh}/${_d}_ecc"
+                  conf="${THREEAM_ACME_HOME:-$HOME/.acme.sh}/${_d}_ecc/${_d}.conf"
+                  if [ ! -f "$conf" ]; then
+                    printf "Le_Domain='%s'\\n" "${_d}" > "$conf"
+                  fi
+                  # Touch a .cer so post-issue scan of domains finds it.
+                  : > "${THREEAM_ACME_HOME:-$HOME/.acme.sh}/${_d}_ecc/${_d}.cer"
+                fi
+                exit 0
+                """
+            )
+        )
+        upstream.chmod(0o755)
+        (home / "3am-scan.env").write_text(f'export SCAN_SERVER="https://scan.test"\nexport THREEAM_ACME_HOME="{home}"\n')
+
+        r = _run_lib(
+            f'threeam_write_acme_wrapper "{home}" && '
+            f'grep -q "3am-acme-wrapper CORE-64" "{home}/acme.sh" && '
+            f'test -x "{home}/acme.sh.upstream" && '
+            f'THREEAM_ACME_HOME="{home}" HOME="{tmp_path}" "{home}/acme.sh" --issue -d agent.demo && '
+            f'grep Le_DeployHook "{home}/agent.demo_ecc/agent.demo.conf"',
+            env={"HOME": str(tmp_path)},
+        )
+        assert r.returncode == 0, r.stderr + r.stdout
+        assert "Le_DeployHook='3am_scan'" in r.stdout
+        log = (tmp_path / "upstream.log").read_text()
+        assert "--issue" in log
+        assert "--deploy" in log
+        assert "--deploy-hook 3am_scan" in log
+
+    def test_injects_deploy_hook_on_deploy(self, tmp_path):
+        home = tmp_path / ".acme.sh"
+        home.mkdir()
+        (home / "acme.sh").write_text("#!/bin/sh\necho \"UP:$*\" >> \"$HOME/upstream.log\"\n")
+        (home / "acme.sh").chmod(0o755)
+        r = _run_lib(
+            f'threeam_write_acme_wrapper "{home}" && '
+            f'HOME="{tmp_path}" "{home}/acme.sh" --deploy -d agent.demo',
+            env={"HOME": str(tmp_path)},
+        )
+        assert r.returncode == 0, r.stderr
+        log = (tmp_path / "upstream.log").read_text()
+        assert "--deploy" in log
+        assert "--deploy-hook 3am_scan" in log
+
+    def test_rewrite_is_idempotent(self, tmp_path):
+        home = tmp_path / ".acme.sh"
+        home.mkdir()
+        (home / "acme.sh").write_text("#!/bin/sh\necho REAL\n")
+        (home / "acme.sh").chmod(0o755)
+        r = _run_lib(
+            f'threeam_write_acme_wrapper "{home}" && '
+            f'threeam_write_acme_wrapper "{home}" && '
+            f'test -x "{home}/acme.sh.upstream" && '
+            f'grep -c "3am-acme-wrapper CORE-64" "{home}/acme.sh"'
+        )
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip().endswith("1")
+        assert "REAL" in (home / "acme.sh.upstream").read_text()
