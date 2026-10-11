@@ -34,7 +34,7 @@ agents:
     companion: "1.1.1"
 ```
 
-**Today on main (until first CORE-65 publish after product sign-off):** `MODULE=v0.2.1` + `pin=3.1.1`. Next propose-pin forces `MODULE=pin`.
+**Cutover:** first mirrored tag is **`3.1.1`** (`MODULE` == `pin` == `3.1.1`). Newer upstream pins are a separate propose/publish test.
 
 ---
 

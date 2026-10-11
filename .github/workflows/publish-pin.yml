@@ -1,5 +1,5 @@
-# Copyright (c) 2026 Axelspire Inc. All rights reserved.
-# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+# Copyright (c) 2026 Axelspire Inc.
+# SPDX-License-Identifier: MIT
 #
 # Phase B: promote a frozen A2 candidate prerelease into draft PRs for
 # agent-repo main (if needed), 3am-core publish tree, and fleet pin.

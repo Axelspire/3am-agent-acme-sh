@@ -1,11 +1,10 @@
 #!/usr/bin/env sh
-# Copyright (c) 2026 Axelspire Inc. All rights reserved.
-# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+# Copyright (c) 2026 Axelspire Inc.
+# SPDX-License-Identifier: MIT
 #
-# Proposed single operator entrypoint (CORE-65).
-# Product/legal sign-off still picks the public name (3am-acme vs keep wrapped
-# acme.sh). Until then this script is the contract for install / cron / stamp /
-# wake and may be renamed without changing behaviour.
+# Optional helper (CORE-65). Operator-facing command remains PATH acme.sh
+# (wrapper). This stub is not required for install or cron; keep for local
+# install/cron/stamp/wake convenience only.
 #
 # Usage:
 #   3am-acme install [AGENT_BASE]
@@ -23,7 +22,7 @@ _ACME_HOME="${THREEAM_ACME_HOME:-${HOME}/.acme.sh}"
 
 _usage() {
   cat <<'EOF'
-3am-acme — proposed single entrypoint (CORE-65; name TBD)
+3am-acme — optional helper (not the user-facing entrypoint)
 
   install [AGENT_BASE]  Run one-curl installer (same as install.sh)
   cron                  acme.sh --cron --home $THREEAM_ACME_HOME (wrapper)
@@ -31,8 +30,7 @@ _usage() {
   wake                  Run companion scan if a leaf cert exists
   help                  This text
 
-After one-curl, the PATH command remains `acme.sh` (wrapper) unless product
-renames the public entrypoint. Prefer one crontab line:
+Operators use PATH `acme.sh` after one-curl. Prefer one crontab line:
 
   acme.sh --cron --home ~/.acme.sh
 EOF

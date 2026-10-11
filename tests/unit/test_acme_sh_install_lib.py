@@ -1,5 +1,5 @@
-# Copyright (c) 2026 Axelspire Inc. All rights reserved.
-# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+# Copyright (c) 2026 Axelspire Inc.
+# SPDX-License-Identifier: MIT
 """Unit tests for install-lib.sh helpers (≥90% of lib logic)."""
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
-# Copyright (c) 2026 Axelspire Inc. All rights reserved.
-# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+# Copyright (c) 2026 Axelspire Inc.
+# SPDX-License-Identifier: MIT
 #
 # One-curl install/update for per-customer acme.sh + datasink companion.
 #
@@ -16,7 +16,7 @@
 #   manifest.json
 #   archive/<pin>.tar.gz         # upstream GPL acme.sh (untouched)
 #   tags/<pin>                   # sha256 of archive bytes (required when present)
-#   companion/3am-scan.sh        # proprietary (OUTSIDE GPL tarball)
+#   companion/3am-scan.sh        # MIT companion (OUTSIDE GPL tarball)
 #   companion/deploy/3am_scan.sh # thin deploy-hook launcher
 #   companion/VERSION
 #

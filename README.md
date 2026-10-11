@@ -1,8 +1,7 @@
 # acme.sh + one-file scan (DATASINK-31 / DATASINK-55)
 
-Test/dev scan agent for **3am-datasink**. Long-term we build our own agent;
-for Phase 0/1 smoke we use **pristine upstream [acme.sh](https://github.com/acmesh-official/acme.sh)**
-plus our proprietary companion — never patched into the GPL tree.
+Public **MIT** packaging for **pristine upstream [acme.sh](https://github.com/acmesh-official/acme.sh)**
+(GPL-3.0 archive) plus our MIT scan companion / deploy-hook — never patched into the GPL tree.
 
 > **`at3am`** is our separate ACME client product (OSS-capable). It is **not**
 > this test agent. Sink paths may still be named `/v1/at3am/*` historically.
@@ -13,8 +12,8 @@ This repository is the packaging source of truth — see [`OWN_REPO.md`](./OWN_R
 Assemble published `install.sh` into `3am-core/deploy/agents/acmesh/` until core consumes release bundles.
 
 **Versioning (CORE-65):** git tag == upstream acme.sh tag == `pin` (`x.y.z`). No separate
-`MODULE=v0.x.y` lineage. Public OSS cutover checklist: [`PUBLIC-OSS.md`](./PUBLIC-OSS.md).
-Proposed single entrypoint stub: [`3am-acme`](./3am-acme) (name TBD).
+`MODULE=v0.x.y` lineage. Operator entrypoint remains PATH **`acme.sh`** (wrapper).
+Decisions: [`PUBLIC-OSS.md`](./PUBLIC-OSS.md). Optional stub [`3am-acme`](./3am-acme) is **not** required.
 
 ## One-curl install / update (preferred)
 
@@ -56,7 +55,7 @@ agent/acme.sh/
   pin                        # e.g. 3.0.7
   archive/<pin>.tar.gz       # GPL upstream ONLY
   tags/<pin>                 # optional digest
-  companion/3am-scan.sh      # proprietary (OUTSIDE tarball)
+  companion/3am-scan.sh      # MIT companion (OUTSIDE GPL tarball)
   companion/deploy/3am_scan.sh
   companion/VERSION
 ```
@@ -104,10 +103,8 @@ Set `SCAN_USE_SCOPE=1` to force the legacy scope path.
 
 ## GPL / license boundary
 
-- **acme.sh** is GPL-3.0 — keep the distributed tarball pristine; do not concatenate scan into it.
-- **Packaging + companion** are proprietary today (`COPYRIGHT`); CORE-65 will relicense them
-  Apache-2.0 or MIT after product/legal sign-off (see `PUBLIC-OSS.md`). They stay **outside**
-  the GPL archive either way.
+- **Upstream acme.sh** is GPL-3.0 — keep `archive/*.tar.gz` pristine; do not concatenate scan into it.
+- **Packaging + companion + wrapper** are **MIT** (`LICENSE`). They stay **outside** the GPL archive.
 - **`deploy/3am_scan.sh`** is a thin launcher only (env map + exec); shipped outside the GPL archive.
 
 ## Updating upstream acme.sh

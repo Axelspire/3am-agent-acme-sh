@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
-# Copyright (c) 2026 Axelspire Inc. All rights reserved.
-# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+# Copyright (c) 2026 Axelspire Inc.
+# SPDX-License-Identifier: MIT
 #
 # Build a candidate publish bundle directory from the current tree
 # (after vendor-pin.sh). Output is suitable for a GitHub prerelease (A2).
