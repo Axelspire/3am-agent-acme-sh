@@ -5,7 +5,7 @@
 # Thin acme.sh deploy-hook launcher for datasink scan.
 #
 # GPL boundary: this file only maps acme.sh deploy args → SCAN_* env and
-# execs the proprietary companion OUTSIDE the acme.sh tree. Do not embed
+# execs the MIT companion OUTSIDE the acme.sh tree. Do not embed
 # scan/report protocol here. Do not ship this inside the GPL archive tarball
 # as a required part of upstream — install via one-curl companion path.
 #
