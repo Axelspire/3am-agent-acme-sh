@@ -39,6 +39,12 @@ Derived scan vanity: `@THREEAM_SCAN_SERVER@` (override with `THREEAM_SCAN_SERVER
 | Scan companion | `~/.acme.sh/deploy/3am-scan.sh` (also mirrored under `~/.local/lib/3am/`) |
 | Env defaults (no secrets) | `~/.acme.sh/3am-scan.env` |
 
+**`3am-scan.env` vs original acme.sh:** compatible sidecar. Only our wrapper and
+thin `3am_scan` hook source it (`SCAN_SERVER`, `THREEAM_SCAN`, `THREEAM_LIB_DIR`,
+`THREEAM_ACME_HOME` — no secrets). Upstream `acme.sh.upstream` / stock acme.sh
+never reads the file; it only gets `--home` + argv. Drop the wrapper and the
+file is inert.
+
 The GPL `archive/@PIN@.tar.gz` is never modified — companion and hook stay outside it.
 
 **Always-on deploy-hook (CORE-64):** one-curl wraps `acme.sh` so operators do **not**

@@ -31,6 +31,7 @@ What it does:
 3. Extracts **flat or nested** archive layouts; runs `acme.sh --install --force` / refresh.
 4. Installs companion + thin deploy-hook under `~/.acme.sh/deploy/` (lib mirror too).
 5. Writes `~/.acme.sh/3am-scan.env` with `SCAN_SERVER` + `THREEAM_SCAN` (no secrets).
+   Sidecar only — original/upstream acme.sh never sources it (wrapper + thin hook do).
 6. Wraps `acme.sh` so `Le_DeployHook=3am_scan` is **always** stamped and auto-deploy
    runs after issue/sign-csr (CORE-64 — no manual `--deploy-hook` required).
 7. Single crontab line: wrapper `--cron` renews, runs the hook, and wakes the companion
