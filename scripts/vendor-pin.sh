@@ -12,8 +12,9 @@
 #   ./scripts/vendor-pin.sh 3.1.0
 #   ./scripts/vendor-pin.sh 3.1.0 --sync-core ../3am-core
 #
-# Then: bump fleet agents.acme.sh.pin (and core module tag after sync),
+# Then: bump fleet agents.acme.sh.pin (CORE-65: module == pin),
 # apply customer-deploy. Hosts pick up via one-curl (not acme.sh --upgrade).
+# Prefer Actions propose-pin / publish-pin — they also tag this repo x.y.z.
 
 set -eu
 

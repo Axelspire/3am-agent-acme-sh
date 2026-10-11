@@ -12,6 +12,10 @@ plus our proprietary companion — never patched into the GPL tree.
 This repository is the packaging source of truth — see [`OWN_REPO.md`](./OWN_REPO.md).
 Assemble published `install.sh` into `3am-core/deploy/agents/acmesh/` until core consumes release bundles.
 
+**Versioning (CORE-65):** git tag == upstream acme.sh tag == `pin` (`x.y.z`). No separate
+`MODULE=v0.x.y` lineage. Public OSS cutover checklist: [`PUBLIC-OSS.md`](./PUBLIC-OSS.md).
+Proposed single entrypoint stub: [`3am-acme`](./3am-acme) (name TBD).
+
 ## One-curl install / update (preferred)
 
 Per-customer FQDN (same URL upgrades pin + companion + hook):
@@ -100,9 +104,11 @@ Set `SCAN_USE_SCOPE=1` to force the legacy scope path.
 
 ## GPL / license boundary
 
-- **acme.sh** is GPL-3.0 — keep the distributed tarball pristine; do not concatenate proprietary scan into it.
-- **`3am-scan.sh`** is Axelspire proprietary (repo `COPYRIGHT`).
-- **`deploy/3am_scan.sh`** is a thin launcher only (env map + exec); still shipped outside the GPL archive for v1 clarity.
+- **acme.sh** is GPL-3.0 — keep the distributed tarball pristine; do not concatenate scan into it.
+- **Packaging + companion** are proprietary today (`COPYRIGHT`); CORE-65 will relicense them
+  Apache-2.0 or MIT after product/legal sign-off (see `PUBLIC-OSS.md`). They stay **outside**
+  the GPL archive either way.
+- **`deploy/3am_scan.sh`** is a thin launcher only (env map + exec); shipped outside the GPL archive.
 
 ## Updating upstream acme.sh
 
