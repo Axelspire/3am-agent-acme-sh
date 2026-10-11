@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
-# Copyright (c) 2026 Axelspire Inc. All rights reserved.
-# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+# Copyright (c) 2026 Axelspire Inc.
+# SPDX-License-Identifier: MIT
 #
 # Assemble a self-contained install.sh for 3am-core S3 publish
 # (curl|sh cannot source sibling install-lib.sh).

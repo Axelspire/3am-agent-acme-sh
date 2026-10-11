@@ -1,14 +1,17 @@
 # `3am-agent-acme-sh`
 
-Source of truth for the acme.sh OSS agent (installer, companion, thin
-deploy-hook, INSTALL.md, tests, upstream pin tooling + GH Actions).
+Source of truth for the acme.sh agent (installer, companion, thin deploy-hook,
+INSTALL.md, tests, upstream pin tooling + GH Actions).
 
-**Remote:** `Axelspire/3am-agent-acme-sh` (private).
+**Remote:** [`Axelspire/3am-agent-acme-sh`](https://github.com/Axelspire/3am-agent-acme-sh)
+— public OSS (**MIT**). Upstream archives under `archive/` remain **GPL-3.0**.
 
-| Artifact | Role |
+| Artifact | Role (CORE-65) |
 |---|---|
-| `MODULE` / git tag `v0.x.x` | Wrapper release → fleet `agents.acme.sh.module` |
-| `pin` + `tags/<pin>` | Upstream GPL acme.sh → fleet `agents.acme.sh.pin` |
-| Actions `propose-pin` / `publish-pin` | Candidate (A2 prerelease) → promote to core/fleet PRs |
+| git tag `x.y.z` / `pin` / `tags/<pin>` | **Only** release identity — mirrors upstream acme.sh |
+| `MODULE` file | Alias **== pin** (SPA/TF `@MODULE@` bake) |
+| `VERSION` / fleet `companion` | Companion content version (not a release tag) |
+| Actions `propose-pin` / `publish-pin` | Candidate `candidate-pin-x.y.z` → tag `x.y.z` + core/fleet PRs |
+| PATH `acme.sh` | Operator entrypoint (wrapper). Optional stub `3am-acme` is not required |
 
-Upstream bumps: [`UPSTREAM.md`](./UPSTREAM.md).
+Upstream bumps: [`UPSTREAM.md`](./UPSTREAM.md). Decisions: [`PUBLIC-OSS.md`](./PUBLIC-OSS.md).

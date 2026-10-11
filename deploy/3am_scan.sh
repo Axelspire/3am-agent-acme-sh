@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 Axelspire Inc. All rights reserved.
-# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+# Copyright (c) 2026 Axelspire Inc.
+# SPDX-License-Identifier: MIT
 #
 # Thin acme.sh deploy-hook launcher for datasink scan.
 #
 # GPL boundary: this file only maps acme.sh deploy args → SCAN_* env and
-# execs the proprietary companion OUTSIDE the acme.sh tree. Do not embed
+# execs the MIT companion OUTSIDE the acme.sh tree. Do not embed
 # scan/report protocol here. Do not ship this inside the GPL archive tarball
 # as a required part of upstream — install via one-curl companion path.
 #

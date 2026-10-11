@@ -1,0 +1,103 @@
+#!/usr/bin/env sh
+# Copyright (c) 2026 Axelspire Inc.
+# SPDX-License-Identifier: MIT
+#
+# Optional helper (CORE-65). Operator-facing command remains PATH acme.sh
+# (wrapper). This stub is not required for install or cron; keep for local
+# install/cron/stamp/wake convenience only.
+#
+# Usage:
+#   3am-acme install [AGENT_BASE]
+#   3am-acme cron
+#   3am-acme stamp
+#   3am-acme wake
+#   3am-acme --help
+#
+# shellcheck shell=sh
+
+set -eu
+
+_ROOT=$(CDPATH='' cd -- "$(dirname "$0")" 2>/dev/null && pwd || true)
+_ACME_HOME="${THREEAM_ACME_HOME:-${HOME}/.acme.sh}"
+
+_usage() {
+  cat <<'EOF'
+3am-acme — optional helper (not the user-facing entrypoint)
+
+  install [AGENT_BASE]  Run one-curl installer (same as install.sh)
+  cron                  acme.sh --cron --home $THREEAM_ACME_HOME (wrapper)
+  stamp                 Stamp Le_DeployHook=3am_scan on domain confs
+  wake                  Run companion scan if a leaf cert exists
+  help                  This text
+
+Operators use PATH `acme.sh` after one-curl. Prefer one crontab line:
+
+  acme.sh --cron --home ~/.acme.sh
+EOF
+}
+
+_need_wrapper() {
+  if [ ! -x "${_ACME_HOME}/acme.sh" ]; then
+    echo "3am-acme: missing ${_ACME_HOME}/acme.sh — run: 3am-acme install" >&2
+    exit 1
+  fi
+}
+
+_cmd_install() {
+  if [ -n "${_ROOT}" ] && [ -f "${_ROOT}/install.sh" ]; then
+    # shellcheck disable=SC1091
+    exec sh "${_ROOT}/install.sh" "${1:-}"
+  fi
+  echo "3am-acme: install.sh not found next to this script" >&2
+  exit 1
+}
+
+_cmd_cron() {
+  _need_wrapper
+  exec "${_ACME_HOME}/acme.sh" --cron --home "${_ACME_HOME}"
+}
+
+_cmd_stamp() {
+  _need_wrapper
+  if [ -n "${_ROOT}" ] && [ -f "${_ROOT}/install-lib.sh" ]; then
+    # shellcheck source=install-lib.sh
+    . "${_ROOT}/install-lib.sh"
+    threeam_ensure_all_deploy_hooks "${_ACME_HOME}"
+    threeam_write_acme_wrapper "${_ACME_HOME}"
+    threeam_info "stamped Le_DeployHook=3am_scan + refreshed wrapper"
+    return 0
+  fi
+  echo "3am-acme: stamp requires install-lib.sh or a re-run of install" >&2
+  exit 1
+}
+
+_cmd_wake() {
+  _scan="${THREEAM_SCAN:-}"
+  if [ -z "${_scan}" ] || [ ! -x "${_scan}" ]; then
+    if [ -x "${_ACME_HOME}/deploy/3am-scan.sh" ]; then
+      _scan="${_ACME_HOME}/deploy/3am-scan.sh"
+    else
+      echo "3am-acme: companion 3am-scan.sh not found" >&2
+      exit 1
+    fi
+  fi
+  ls "${_ACME_HOME}"/*_ecc/*.cer >/dev/null 2>&1 \
+    || ls "${_ACME_HOME}"/*/*.cer >/dev/null 2>&1 \
+    || { echo "3am-acme: no leaf cert yet — wake skipped"; exit 0; }
+  exec "${_scan}"
+}
+
+cmd="${1:-help}"
+[ "$#" -gt 0 ] && shift || true
+case "${cmd}" in
+  install) _cmd_install "${1:-}" ;;
+  cron) _cmd_cron ;;
+  stamp) _cmd_stamp ;;
+  wake) _cmd_wake ;;
+  -h|--help|help) _usage ;;
+  *)
+    echo "3am-acme: unknown command: ${cmd}" >&2
+    _usage >&2
+    exit 1
+    ;;
+esac

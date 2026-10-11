@@ -1,9 +1,12 @@
-# Copyright (c) 2026 Axelspire Inc. All rights reserved.
-# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+# Copyright (c) 2026 Axelspire Inc.
+# SPDX-License-Identifier: MIT
 #
 # Phase A (A2): vendor an upstream acme.sh pin, test, publish a GitHub
 # *prerelease* candidate bundle, open a draft metadata PR. Does not touch
 # customer S3 / fleet.
+#
+# CORE-65: customer identity is pin x.y.z only. Candidate tag =
+# candidate-pin-<x.y.z>. MODULE file is forced to == pin (no v0.x.y bump).
 
 name: propose-pin
 
@@ -11,14 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       upstream_pin:
-        description: Upstream acme.sh git tag (e.g. 3.1.0)
+        description: Upstream acme.sh git tag (e.g. 3.1.2) — becomes our tag too
         required: true
         type: string
-      bump_module:
-        description: Also bump MODULE patch (installer/companion changed)
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -52,33 +50,28 @@ jobs:
               ;;
           esac
 
-      - name: Optional MODULE bump
-        if: ${{ inputs.bump_module }}
-        run: |
-          cur=$(tr -d '[:space:]' < MODULE)
-          # v0.1.1 → v0.1.2 (patch only)
-          base=${cur#v}
-          major=${base%%.*}
-          rest=${base#*.}
-          minor=${rest%%.*}
-          patch=${rest#*.}
-          patch=$((patch + 1))
-          next="v${major}.${minor}.${patch}"
-          printf '%s\n' "${next}" > MODULE
-          python3 - <<PY
-          import json
-          from pathlib import Path
-          m = json.loads(Path("manifest.json").read_text())
-          m["module"] = Path("MODULE").read_text().strip()
-          Path("manifest.json").write_text(json.dumps(m, indent=2) + "\n")
-          print("MODULE", m["module"])
-          PY
-
       - name: Vendor upstream pin
         run: ./scripts/vendor-pin.sh "${{ inputs.upstream_pin }}"
 
+      - name: Align MODULE with pin (CORE-65)
+        run: |
+          # Retire separate v0.x.y module lineage: MODULE file == pin string.
+          PIN=$(tr -d '[:space:]' < pin)
+          printf '%s\n' "${PIN}" > MODULE
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          pin = Path("pin").read_text().strip()
+          m = json.loads(Path("manifest.json").read_text())
+          m["module"] = pin
+          m["pin"] = pin
+          m["version_line"] = "pin"
+          Path("manifest.json").write_text(json.dumps(m, indent=2) + "\n")
+          print("MODULE=pin=", pin)
+          PY
+
       - name: shellcheck
-        run: shellcheck -S warning -x install-lib.sh install.sh scripts/*.sh
+        run: shellcheck -S warning -x install-lib.sh install.sh 3am-acme scripts/*.sh
 
       - name: unit tests
         run: python3 -m pytest tests/unit --confcutdir=tests/unit -v
@@ -86,7 +79,7 @@ jobs:
       - name: Build candidate bundle
         id: bundle
         run: |
-          chmod +x scripts/*.sh
+          chmod +x scripts/*.sh 3am-acme
           ./scripts/build-candidate-bundle.sh
           tag=$(tr -d '[:space:]' < dist/candidate-bundle/CANDIDATE_TAG.txt)
           echo "candidate_tag=${tag}" >> "$GITHUB_OUTPUT"
@@ -132,6 +125,7 @@ jobs:
           Candidate upstream pin **${PIN}** (A2 — not customer-facing).
 
           - archive sha256: \`${DIGEST}\`
+          - CORE-65: customer tag after publish = \`${PIN}\` (not a v0.x.y module)
           - Smoke: local HTTP install in CI passed
           - Next: run **publish-pin** with \`candidate_ref=${TAG}\` after LGTM
 
@@ -178,17 +172,18 @@ jobs:
             echo "No metadata changes vs main (pin already on main)"
             exit 0
           fi
-          git commit -m "Vendor upstream acme.sh pin ${PIN} (candidate ${TAG})"
+          git commit -m "CORE-65: vendor upstream acme.sh pin ${PIN} (candidate ${TAG})"
           git push -u origin "${branch}" --force
-          body="Draft from **propose-pin**. Candidate prerelease: \`${TAG}\`.
+          body="Draft from **propose-pin** (CORE-65). Candidate prerelease: \`${TAG}\`.
 
-          Promote with **publish-pin** (\`candidate_ref=${TAG}\`) after LGTM."
+          After LGTM, **publish-pin** (\`candidate_ref=${TAG}\`) tags this repo **\`${PIN}\`**
+          (git tag == pin == upstream) and opens core/fleet drafts."
           existing=$(gh pr list --head "${branch}" --json number --jq '.[0].number // empty')
           if [ -n "${existing}" ]; then
-            gh pr edit "${existing}" --title "Vendor upstream acme.sh pin ${PIN}" --body "${body}"
+            gh pr edit "${existing}" --title "CORE-65: vendor upstream acme.sh pin ${PIN}" --body "${body}"
             gh pr ready "${existing}" --undo || true
           else
             gh pr create --draft --base main --head "${branch}" \
-              --title "Vendor upstream acme.sh pin ${PIN}" \
+              --title "CORE-65: vendor upstream acme.sh pin ${PIN}" \
               --body "${body}"
           fi

@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
-# Copyright (c) 2026 Axelspire Inc. All rights reserved.
-# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+# Copyright (c) 2026 Axelspire Inc.
+# SPDX-License-Identifier: MIT
 #
 # Vendor a pristine upstream acme.sh release into this repo's pin/tags
 # (and local archive/*.tar.gz — gitignored) for publish sync.
@@ -12,8 +12,9 @@
 #   ./scripts/vendor-pin.sh 3.1.0
 #   ./scripts/vendor-pin.sh 3.1.0 --sync-core ../3am-core
 #
-# Then: bump fleet agents.acme.sh.pin (and core module tag after sync),
+# Then: bump fleet agents.acme.sh.pin (CORE-65: module == pin),
 # apply customer-deploy. Hosts pick up via one-curl (not acme.sh --upgrade).
+# Prefer Actions propose-pin / publish-pin — they also tag this repo x.y.z.
 
 set -eu
 

@@ -1,7 +1,7 @@
 # acme.sh agent — install
 
 One-curl install (or upgrade) for this customer. Same URL refreshes the pinned
-upstream acme.sh archive **and** the proprietary scan companion / thin deploy-hook.
+upstream acme.sh archive **and** the MIT scan companion / thin deploy-hook.
 
 ## Host prerequisites
 
@@ -25,7 +25,8 @@ sudo apt-get install -y cron
 curl -fsSL @THREEAM_AGENT_BASE@/install.sh | sh
 ```
 
-Pinned upstream: **@PIN@** · Companion module: **@MODULE@**
+Pinned upstream (release identity): **@PIN@** · `MODULE` alias: **@MODULE@**
+(CORE-65: `@MODULE@` == pin `x.y.z`; operator command stays PATH `acme.sh`).
 
 Derived scan vanity: `@THREEAM_SCAN_SERVER@` (override with `THREEAM_SCAN_SERVER`).
 

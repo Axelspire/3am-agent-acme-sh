@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
-# Copyright (c) 2026 Axelspire Inc. All rights reserved.
-# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+# Copyright (c) 2026 Axelspire Inc.
+# SPDX-License-Identifier: MIT
 #
 # A2 smoke: serve a candidate bundle over localhost HTTP and run install.sh
 # against it (digest check + extract + acme.sh --install into a temp HOME).
