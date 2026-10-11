@@ -104,4 +104,59 @@ if [ ! -f "${HOME}/.acme.sh/deploy/3am-scan.sh" ] && [ ! -f "${HOME}/.local/lib/
   exit 1
 fi
 
+# CORE-64 / CORE-65: wrapper + sidecar env + upstream binary + single-cron wake path
+if ! grep -q '3am-acme-wrapper CORE-64' "${HOME}/.acme.sh/acme.sh" 2>/dev/null; then
+  echo "smoke-candidate: PATH wrapper marker missing on ~/.acme.sh/acme.sh" >&2
+  exit 1
+fi
+if [ ! -x "${HOME}/.acme.sh/acme.sh.upstream" ]; then
+  echo "smoke-candidate: acme.sh.upstream missing (wrapper did not relocate stock binary)" >&2
+  exit 1
+fi
+if [ ! -f "${HOME}/.acme.sh/3am-scan.env" ]; then
+  echo "smoke-candidate: 3am-scan.env missing" >&2
+  exit 1
+fi
+# shellcheck disable=SC1090
+. "${HOME}/.acme.sh/3am-scan.env"
+case "${SCAN_SERVER:-}" in
+  https://*) ;;
+  *)
+    echo "smoke-candidate: SCAN_SERVER unset/invalid in 3am-scan.env" >&2
+    exit 1
+    ;;
+esac
+[ -n "${THREEAM_SCAN:-}" ] && [ -x "${THREEAM_SCAN}" ] || {
+  echo "smoke-candidate: THREEAM_SCAN not executable (${THREEAM_SCAN:-})" >&2
+  exit 1
+}
+# Upstream binary must not source our env file (sidecar contract).
+if grep -q '3am-scan\.env' "${HOME}/.acme.sh/acme.sh.upstream" 2>/dev/null; then
+  echo "smoke-candidate: upstream binary unexpectedly references 3am-scan.env" >&2
+  exit 1
+fi
+# Wrapper --cron path should invoke upstream (no second dual-cron wake required).
+if ! grep -q '_wake_companion\|_is_cron' "${HOME}/.acme.sh/acme.sh" 2>/dev/null; then
+  echo "smoke-candidate: wrapper missing --cron companion wake" >&2
+  exit 1
+fi
+# Simulate a domain conf + stamp via wrapper --deploy injection path.
+mkdir -p "${HOME}/.acme.sh/smoke.example.com"
+printf "Le_Domain='smoke.example.com'\n" > "${HOME}/.acme.sh/smoke.example.com/smoke.example.com.conf"
+# Running --deploy against missing cert may fail; we only need stamp side-effect.
+set +e
+"${HOME}/.acme.sh/acme.sh" --home "${HOME}/.acme.sh" --deploy -d smoke.example.com --deploy-hook 3am_scan \
+  >"${WORK}/deploy.log" 2>&1
+set -e
+if ! grep -q "3am_scan" "${HOME}/.acme.sh/smoke.example.com/smoke.example.com.conf" 2>/dev/null; then
+  # Stamp happens before upstream deploy; re-check after any wrapper stamp on --deploy
+  if ! grep -q "Le_DeployHook=.*3am_scan" "${HOME}/.acme.sh/smoke.example.com/smoke.example.com.conf" 2>/dev/null; then
+    echo "smoke-candidate: Le_DeployHook not stamped with 3am_scan" >&2
+    cat "${HOME}/.acme.sh/smoke.example.com/smoke.example.com.conf" >&2 || true
+    tail -n 40 "${WORK}/deploy.log" >&2 || true
+    exit 1
+  fi
+fi
+echo "smoke-candidate: wrapper+env+stamp OK"
+
 echo "smoke-candidate: OK (pin=${PIN})"
