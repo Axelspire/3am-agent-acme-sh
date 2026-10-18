@@ -6,8 +6,3 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-  - package-ecosystem: /tmp/w1-repos/3am-agent-acme-sh
-    directory: /tmp/w1-repos/3am-agent-acme-sh
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
