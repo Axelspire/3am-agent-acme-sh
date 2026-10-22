@@ -28,3 +28,13 @@ jobs:
         run: shellcheck -S warning -x install-lib.sh install.sh scripts/*.sh
       - name: unit tests
         run: python3 -m pytest tests/unit --confcutdir=tests/unit -v
+
+      - name: Smoke upload-artifact@v7
+        run: |
+          mkdir -p /tmp/v7-smoke
+          echo "ok" > /tmp/v7-smoke/ok.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: actions-v7-smoke
+          path: /tmp/v7-smoke/ok.txt
+          retention-days: 1
