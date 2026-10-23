@@ -7,6 +7,11 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Weekly default-branch run keeps readiness workflow_job evidence fresh
+  # (collector max_age_days: 14) on a low-churn repo.
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
 
 permissions:
   contents: read
