@@ -21,4 +21,5 @@ Human-facing product history for operators. **Criterion links** live in the Axel
 
 | Date (UTC) | Summary | PR |
 | --- | --- | --- |
+| 2026-10-23 | Two-pin upgrade path test + `upgrade-path-check` CI job (readiness AGT.03) | branch `cursor/design-36-upgrade-path-check-c99a` |
 | 2026-10-18 | Dependabot path fix for readiness SEC.04 | [#10](https://github.com/Axelspire/3am-agent-acme-sh/pull/10) |
