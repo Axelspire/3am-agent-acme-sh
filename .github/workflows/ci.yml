@@ -28,3 +28,22 @@ jobs:
         run: shellcheck -S warning -x install-lib.sh install.sh scripts/*.sh
       - name: unit tests
         run: python3 -m pytest tests/unit --confcutdir=tests/unit -v
+
+  # Readiness AGT.03.L2.b — one-curl re-run upgrades pin + companion through the
+  # real install.sh; tampered upgrade archive hard-fails and keeps the old pin.
+  upgrade-path-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install tools
+        run: python3 -m pip install -q pytest
+      - name: Prove upgrade path
+        run: |
+          set -eu
+          python3 -m pytest --confcutdir=tests/unit -v \
+            tests/unit/test_upgrade_path.py \
+            tests/unit/test_acme_sh_install_lib.py::TestVerifyArchiveDigest \
+            tests/unit/test_acme_sh_install_lib.py::TestUrlAndPaths::test_should_upgrade
