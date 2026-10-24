@@ -18,8 +18,9 @@ on:
         required: true
         type: string
 
-# Optional environment with required reviewers — create "agent-pin-publish"
-# in repo Settings → Environments. If missing, job still runs (no gate).
+# Environment "agent-pin-publish" should have required reviewers. Verified
+# 2026-10-24: environment exists with zero protection_rules — publish is
+# ungated until a reviewer is added (DESIGN-43). Job still runs (no hard fail).
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -29,6 +30,17 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v7
+
+      - name: Warn if agent-pin-publish has no required reviewers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rules="$(gh api "repos/${{ github.repository }}/environments/agent-pin-publish" \
+            --jq '[.protection_rules[]? | select(.type=="required_reviewers")] | length')"
+          if [ "${rules}" = "0" ]; then
+            echo "::warning::agent-pin-publish has no required reviewers — pin publish is ungated (DESIGN-43). Add reviewers in Settings → Environments."
+          fi
 
       - name: Require PUBLISH_PAT for cross-repo PRs
         env:
