@@ -21,6 +21,6 @@ Human-facing product history for operators. **Criterion links** live in the Axel
 
 | Date (UTC) | Summary | PR |
 | --- | --- | --- |
-| 2026-10-24 | publish-pin warns when `agent-pin-publish` has no required reviewers (DESIGN-43) | (this PR) |
+| 2026-10-24 | publish-pin warns when `agent-pin-publish` has no required reviewers (DESIGN-43) | [#17](https://github.com/Axelspire/3am-agent-acme-sh/pull/17) |
 | 2026-10-23 | Two-pin upgrade path test + `upgrade-path-check` CI job (readiness AGT.03) | [#16](https://github.com/Axelspire/3am-agent-acme-sh/pull/16) |
 | 2026-10-18 | Dependabot path fix for readiness SEC.04 | [#10](https://github.com/Axelspire/3am-agent-acme-sh/pull/10) |
