@@ -97,7 +97,7 @@ export THREEAM_SCAN="$HOME/.local/lib/3am/3am-scan.sh"
 | Step | Call |
 |---|---|
 | Config | `GET /v1/at3am/config/{host_id}` (mTLS; falls back to legacy `/scope`) |
-| Results | `POST /v1/at3am/results` JSON `{ agent_host, results: [...] }` |
+| Results | `POST /v1/at3am/results` JSON `{ agent_host, results: [...], probe_failures: [...] }` — cert hits in `results`; silent/unreachable probes in `probe_failures` (DESIGN-189) |
 
 Set `SCAN_USE_SCOPE=1` to force the legacy scope path.
 

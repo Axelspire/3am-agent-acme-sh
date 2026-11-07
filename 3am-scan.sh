@@ -101,51 +101,111 @@ _fetch_config() {
   _curl_mtls -f -X GET "$scope_url"
 }
 
+_scan_timeout_from_config() {
+  # Prefer AgentConfig.scan_timeout_seconds (DESIGN-189) over SCAN_TIMEOUT env.
+  local cfg="$1"
+  printf '%s' "$cfg" | python3 -c '
+import json, sys
+doc = json.load(sys.stdin)
+for key in ("scan_timeout_seconds", "tls_connect_timeout_seconds"):
+    v = doc.get(key)
+    if v is None:
+        continue
+    try:
+        n = int(v)
+        if n >= 1:
+            print(n)
+            raise SystemExit(0)
+    except (TypeError, ValueError):
+        pass
+print("")
+' 2>/dev/null || true
+}
+
 _scan_endpoint() {
-  # Args: host port → prints one JSON object (certificate + tls facts) or empty
-  local host="$1" port="$2"
-  local tmp
-  tmp="$(mktemp)"
-  # shellcheck disable=SC2064
-  trap "rm -f '$tmp'" RETURN
+  # Args: host port timeout_seconds
+  # Prints JSON envelope: {"kind":"result","item":{...}} or
+  # {"kind":"probe_failure","item":{ip,port,status,error?,rtt_ms?}} (DESIGN-189).
+  local host="$1" port="$2" timeout="${3:-$SCAN_TIMEOUT}"
+  python3 - "$host" "$port" "$timeout" <<'PY'
+import json, socket, ssl, subprocess, sys, time
 
-  if ! echo | openssl s_client -connect "${host}:${port}" -servername "$host" \
-      -brief 2>/dev/null | head -n 40 >"$tmp"; then
-    # Retry capturing PEM even on non-zero (common for verify errors)
-    echo | openssl s_client -connect "${host}:${port}" -servername "$host" \
-      2>/dev/null >"$tmp" || true
-  fi
+host, port_s, timeout_s = sys.argv[1], sys.argv[2], sys.argv[3]
+port = int(port_s)
+timeout = float(timeout_s or 5)
 
-  if ! grep -q "BEGIN CERTIFICATE" "$tmp"; then
-    return 1
-  fi
+def fail(status, error=None, rtt_ms=None, ip_addr=None):
+    item = {
+        "ip": ip_addr or host,
+        "port": port,
+        "status": status,
+        "error": error or status,
+    }
+    if rtt_ms is not None:
+        item["rtt_ms"] = round(float(rtt_ms), 3)
+    print(json.dumps({"kind": "probe_failure", "item": item}))
+    raise SystemExit(0)
 
-  python3 - "$host" "$port" "$tmp" <<'PY'
-import json, sys, subprocess, datetime
-host, port, path = sys.argv[1], int(sys.argv[2]), sys.argv[3]
-pem = open(path, "r", encoding="utf-8", errors="replace").read()
-# Extract first cert block
-start = pem.find("-----BEGIN CERTIFICATE-----")
-end = pem.find("-----END CERTIFICATE-----")
-if start < 0 or end < 0:
-    sys.exit(1)
-leaf = pem[start:end + len("-----END CERTIFICATE-----")] + "\n"
+t0 = time.monotonic()
+try:
+    infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+except OSError as e:
+    fail("error", error=str(e), rtt_ms=(time.monotonic() - t0) * 1000)
+
+family, _, _, _, sockaddr = infos[0]
+ip = sockaddr[0]
+sock = socket.socket(family, socket.SOCK_STREAM)
+sock.settimeout(timeout)
+try:
+    sock.connect(sockaddr)
+except socket.timeout:
+    fail("timeout", rtt_ms=(time.monotonic() - t0) * 1000, ip_addr=ip)
+except ConnectionRefusedError:
+    fail("refused", rtt_ms=(time.monotonic() - t0) * 1000, ip_addr=ip)
+except OSError as e:
+    err = str(e).lower()
+    # No route / filtered / unreachable often surface as errno 113/101/110-ish.
+    if "timed out" in err or getattr(e, "errno", None) in (110, 60):
+        fail("timeout", error=str(e), rtt_ms=(time.monotonic() - t0) * 1000, ip_addr=ip)
+    if "refused" in err or getattr(e, "errno", None) == 111:
+        fail("refused", error=str(e), rtt_ms=(time.monotonic() - t0) * 1000, ip_addr=ip)
+    if any(x in err for x in ("no route", "unreachable", "filtered", "network is down")):
+        fail("filtered", error=str(e), rtt_ms=(time.monotonic() - t0) * 1000, ip_addr=ip)
+    status = "filtered" if getattr(e, "errno", None) in (101, 113, 51, 65) else "error"
+    fail(status, error=str(e), rtt_ms=(time.monotonic() - t0) * 1000, ip_addr=ip)
+
+rtt_ms = (time.monotonic() - t0) * 1000
+try:
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    ssock = ctx.wrap_socket(sock, server_hostname=host)
+    der = ssock.getpeercert(binary_form=True)
+    ssock.close()
+except Exception as e:
+    try:
+        sock.close()
+    except Exception:
+        pass
+    # TCP open but no usable TLS leaf.
+    fail("open_no_tls", error=str(e), rtt_ms=rtt_ms, ip_addr=ip)
+
+if not der:
+    fail("open_no_tls", error="no peer certificate", rtt_ms=rtt_ms, ip_addr=ip)
+
 proc = subprocess.run(
-    ["openssl", "x509", "-noout", "-subject", "-issuer", "-serial",
-     "-dates", "-ext", "subjectAltName"],
-    input=leaf, text=True, capture_output=True,
+    ["openssl", "x509", "-inform", "DER", "-noout", "-subject", "-issuer",
+     "-serial", "-dates", "-ext", "subjectAltName"],
+    input=der, capture_output=True,
 )
-text = (proc.stdout or "") + (proc.stderr or "")
+text = (proc.stdout or b"").decode("utf-8", "replace") + (proc.stderr or b"").decode("utf-8", "replace")
+
 def grab(prefix):
     for line in text.splitlines():
         if line.startswith(prefix):
             return line.split("=", 1)[-1].strip() if "=" in line else line[len(prefix):].strip()
     return ""
-subject = grab("subject=") or grab("Subject:")
-issuer = grab("issuer=") or grab("Issuer:")
-serial = grab("serial=")
-not_before = grab("notBefore=")
-not_after = grab("notAfter=")
+
 sans = []
 for line in text.splitlines():
     if "DNS:" in line or "IP Address:" in line:
@@ -154,22 +214,31 @@ for line in text.splitlines():
                 sans.append(part[4:])
             elif part.startswith("IPAddress:"):
                 sans.append(part[len("IPAddress:"):])
-out = {
+
+pem_proc = subprocess.run(
+    ["openssl", "x509", "-inform", "DER", "-outform", "PEM"],
+    input=der, capture_output=True,
+)
+# Wire shape historically used a facts object; keep that for companion compat.
+item = {
     "host": host,
     "port": port,
     "certificate": {
-        "subject": subject,
-        "issuer": issuer,
-        "serial": serial,
-        "not_before": not_before,
-        "not_after": not_after,
+        "subject": grab("subject=") or grab("Subject:"),
+        "issuer": grab("issuer=") or grab("Issuer:"),
+        "serial": grab("serial="),
+        "not_before": grab("notBefore="),
+        "not_after": grab("notAfter="),
         "sans": sans,
     },
     "tls": {},
     "scanner": "3am-scan/openssl",
     "timeout_flagged": False,
 }
-print(json.dumps(out))
+# Prefer PEM text when openssl converted cleanly (optional for sink facts path).
+if pem_proc.returncode == 0 and pem_proc.stdout:
+    item["certificate_pem"] = pem_proc.stdout.decode("utf-8", "replace")
+print(json.dumps({"kind": "result", "item": item}))
 PY
 }
 
@@ -449,6 +518,13 @@ main() {
     printf '%s' "$config_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("assignment_generation",0))' 2>/dev/null || echo 0
   ))"
 
+  local cfg_timeout
+  cfg_timeout="$(_scan_timeout_from_config "$config_json")"
+  if [[ -n "$cfg_timeout" ]]; then
+    SCAN_TIMEOUT="$cfg_timeout"
+    _info "using scan_timeout_seconds from config: ${SCAN_TIMEOUT}s"
+  fi
+
   if ! _honour_scan_frequency "$config_json"; then
     exit 0
   fi
@@ -492,6 +568,7 @@ for line in sys.stdin:
   local scanned_at
   scanned_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   local results_json="[]"
+  local probe_failures_json="[]"
 
   for t in "${targets[@]+"${targets[@]}"}"; do
     [[ -n "$t" ]] || continue
@@ -501,11 +578,19 @@ for line in sys.stdin:
       port="443"
     fi
     _info "scanning ${host}:${port}"
-    local one
-    if one="$(_scan_endpoint "$host" "$port")"; then
-      one="$(printf '%s' "$one" | python3 -c "
+    local envelope
+    envelope="$(_scan_endpoint "$host" "$port" "$SCAN_TIMEOUT")" || envelope=""
+    if [[ -z "$envelope" ]]; then
+      _info "probe produced no output at ${host}:${port}"
+      continue
+    fi
+    local kind
+    kind="$(printf '%s' "$envelope" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("kind",""))' 2>/dev/null || true)"
+    if [[ "$kind" == "result" ]]; then
+      local one
+      one="$(printf '%s' "$envelope" | python3 -c "
 import json,sys
-o=json.load(sys.stdin)
+o=json.load(sys.stdin)['item']
 o['host_id']='${HOST_ID}'
 o['scan_id']='${scan_id}'
 o['scanned_at']='${scanned_at}'
@@ -522,18 +607,34 @@ for line in sys.stdin:
     else: items.append(v)
 print(json.dumps(items))
 ')"
+    elif [[ "$kind" == "probe_failure" ]]; then
+      local fail
+      fail="$(printf '%s' "$envelope" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["item"]))')"
+      _info "probe_failure ${host}:${port} → $(printf '%s' "$fail" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status"))')"
+      probe_failures_json="$(printf '%s\n%s\n' "$probe_failures_json" "$fail" | python3 -c '
+import json,sys
+items=[]
+for line in sys.stdin:
+    line=line.strip()
+    if not line: continue
+    v=json.loads(line)
+    if isinstance(v, list): items.extend(v)
+    else: items.append(v)
+print(json.dumps(items))
+')"
     else
-      _info "no TLS cert at ${host}:${port}"
+      _info "unrecognized scan envelope at ${host}:${port}"
     fi
   done
 
   local tmp_payload
   tmp_payload="$(mktemp)"
-  python3 - "$HOST_ID" "$results_json" "$probe_results" "$scan_id" "$scanned_at" <<'PY' >"$tmp_payload"
+  python3 - "$HOST_ID" "$results_json" "$probe_results" "$probe_failures_json" "$scan_id" "$scanned_at" <<'PY' >"$tmp_payload"
 import json, sys, socket
-host_id, results_raw, probes_raw, scan_id, scanned_at = sys.argv[1:6]
+host_id, results_raw, probes_raw, failures_raw, scan_id, scanned_at = sys.argv[1:7]
 results = json.loads(results_raw)
 probes = json.loads(probes_raw) if probes_raw else []
+failures = json.loads(failures_raw) if failures_raw else []
 payload = {
     "agent_host": {
         "hostname": socket.gethostname(),
@@ -543,15 +644,25 @@ payload = {
     "scanned_at": scanned_at,
     "results": results,
     "network_probe_results": probes,
+    "probe_failures": failures,
 }
 print(json.dumps(payload))
 PY
 
   _info "payload hosts scanned: $(printf '%s' "$results_json" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+  _info "probe_failures: $(printf '%s' "$probe_failures_json" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
   _info "network_probe_results: $(printf '%s' "$probe_results" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
-  if [[ "${#targets[@]}" -gt 0 ]] || [[ "$(printf '%s' "$probe_results" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" -gt 0 ]]; then
-    _post_results "$tmp_payload"
-    _touch_scan_stamp
+  local n_results n_failures n_probes
+  n_results="$(printf '%s' "$results_json" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+  n_failures="$(printf '%s' "$probe_failures_json" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+  n_probes="$(printf '%s' "$probe_results" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+  if [[ "${#targets[@]}" -gt 0 ]] || [[ "$n_probes" -gt 0 ]]; then
+    if [[ "$n_results" -gt 0 || "$n_failures" -gt 0 || "$n_probes" -gt 0 ]]; then
+      _post_results "$tmp_payload"
+      _touch_scan_stamp
+    else
+      _info "nothing to post"
+    fi
   else
     _info "nothing to post"
   fi
