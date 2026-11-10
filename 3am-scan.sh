@@ -20,7 +20,8 @@
 #   SCAN_CA       path to CA bundle to verify the scan server (recommended)
 #   SCAN_HOST_ID  override host_id (default: CN from SCAN_CERT)
 #   SCAN_PORTS    comma-separated ports (override config ports)
-#   SCAN_TIMEOUT  connect timeout seconds (default: 5)
+#   SCAN_TIMEOUT  connect timeout seconds (default: 5; overridden by
+#                 AgentConfig.timeouts.connect_seconds when present)
 #   SCAN_USE_SCOPE=1  force legacy GET /scope instead of OpenAPI /config
 #   SCAN_EXPAND=1     expand assigned_cidrs under max_expand_hosts budget
 #   SCAN_STATE_DIR    directory for last-scan timestamp (default: ~/.local/state/3am)
@@ -38,6 +39,8 @@ SCAN_KEY="${SCAN_KEY:-}"
 SCAN_CA="${SCAN_CA:-}"
 SCAN_HOST_ID="${SCAN_HOST_ID:-}"
 SCAN_TIMEOUT="${SCAN_TIMEOUT:-5}"
+SCAN_TLS_HANDSHAKE_TIMEOUT="${SCAN_TLS_HANDSHAKE_TIMEOUT:-$SCAN_TIMEOUT}"
+SCAN_READ_TIMEOUT="${SCAN_READ_TIMEOUT:-$SCAN_TIMEOUT}"
 SCAN_STATE_DIR="${SCAN_STATE_DIR:-${HOME:-/tmp}/.local/state/3am}"
 DEFAULT_PORTS="443,993,995,8443"
 
@@ -101,38 +104,75 @@ _fetch_config() {
   _curl_mtls -f -X GET "$scope_url"
 }
 
-_scan_timeout_from_config() {
-  # Prefer AgentConfig.scan_timeout_seconds (DESIGN-189) over SCAN_TIMEOUT env.
+_scan_timeouts_from_config() {
+  # Prefer AgentConfig.timeouts (DATASINK-86), then scan_timeout_seconds
+  # (DESIGN-189), else empty (keep env defaults).
+  # Prints: connect tls_handshake read  (space-separated) or blank line.
   local cfg="$1"
   printf '%s' "$cfg" | python3 -c '
 import json, sys
 doc = json.load(sys.stdin)
-for key in ("scan_timeout_seconds", "tls_connect_timeout_seconds"):
-    v = doc.get(key)
+
+def as_int(v):
     if v is None:
-        continue
+        return None
     try:
         n = int(v)
-        if n >= 1:
-            print(n)
-            raise SystemExit(0)
     except (TypeError, ValueError):
-        pass
-print("")
+        return None
+    return n if n >= 1 else None
+
+timeouts = doc.get("timeouts") if isinstance(doc.get("timeouts"), dict) else {}
+connect = as_int(timeouts.get("connect_seconds"))
+handshake = as_int(timeouts.get("tls_handshake_seconds"))
+read = as_int(timeouts.get("read_seconds"))
+if connect is None:
+    for key in ("scan_timeout_seconds", "tls_connect_timeout_seconds"):
+        connect = as_int(doc.get(key))
+        if connect is not None:
+            break
+if connect is None and handshake is None and read is None:
+    print("")
+else:
+    # Fill missing siblings from connect (or 5) so agents always get three ints.
+    base = connect if connect is not None else 5
+    print(
+        connect if connect is not None else base,
+        handshake if handshake is not None else base,
+        read if read is not None else base,
+    )
 ' 2>/dev/null || true
 }
 
+_scan_timeout_from_config() {
+  # Compat wrapper: first integer only (connect).
+  local all
+  all="$(_scan_timeouts_from_config "$1")"
+  if [[ -z "$all" ]]; then
+    printf ''
+    return 0
+  fi
+  printf '%s' "${all%% *}"
+}
+
 _scan_endpoint() {
-  # Args: host port timeout_seconds
+  # Args: host port [connect_timeout [tls_handshake_timeout [read_timeout]]]
   # Prints JSON envelope: {"kind":"result","item":{...}} or
   # {"kind":"probe_failure","item":{ip,port,status,error?,rtt_ms?}} (DESIGN-189).
-  local host="$1" port="$2" timeout="${3:-$SCAN_TIMEOUT}"
-  python3 - "$host" "$port" "$timeout" <<'PY'
+  local host="$1" port="$2"
+  local connect_to="${3:-$SCAN_TIMEOUT}"
+  local handshake_to="${4:-${SCAN_TLS_HANDSHAKE_TIMEOUT:-$connect_to}}"
+  local read_to="${5:-${SCAN_READ_TIMEOUT:-$connect_to}}"
+  python3 - "$host" "$port" "$connect_to" "$handshake_to" "$read_to" <<'PY'
 import json, socket, ssl, subprocess, sys, time
 
-host, port_s, timeout_s = sys.argv[1], sys.argv[2], sys.argv[3]
+host, port_s = sys.argv[1], sys.argv[2]
 port = int(port_s)
-timeout = float(timeout_s or 5)
+connect_to = float((sys.argv[3] if len(sys.argv) > 3 else "") or 5)
+handshake_to = float(
+    (sys.argv[4] if len(sys.argv) > 4 else "") or connect_to
+)
+read_to = float((sys.argv[5] if len(sys.argv) > 5 else "") or connect_to)
 
 def fail(status, error=None, rtt_ms=None, ip_addr=None):
     item = {
@@ -155,7 +195,7 @@ except OSError as e:
 family, _, _, _, sockaddr = infos[0]
 ip = sockaddr[0]
 sock = socket.socket(family, socket.SOCK_STREAM)
-sock.settimeout(timeout)
+sock.settimeout(connect_to)
 try:
     sock.connect(sockaddr)
 except socket.timeout:
@@ -176,10 +216,12 @@ except OSError as e:
 
 rtt_ms = (time.monotonic() - t0) * 1000
 try:
+    sock.settimeout(handshake_to)
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     ssock = ctx.wrap_socket(sock, server_hostname=host)
+    ssock.settimeout(read_to)
     der = ssock.getpeercert(binary_form=True)
     ssock.close()
 except Exception as e:
@@ -188,6 +230,9 @@ except Exception as e:
     except Exception:
         pass
     # TCP open but no usable TLS leaf.
+    err = str(e).lower()
+    if "timed out" in err or isinstance(e, socket.timeout):
+        fail("timeout", error=str(e), rtt_ms=(time.monotonic() - t0) * 1000, ip_addr=ip)
     fail("open_no_tls", error=str(e), rtt_ms=rtt_ms, ip_addr=ip)
 
 if not der:
@@ -518,11 +563,14 @@ main() {
     printf '%s' "$config_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("assignment_generation",0))' 2>/dev/null || echo 0
   ))"
 
-  local cfg_timeout
-  cfg_timeout="$(_scan_timeout_from_config "$config_json")"
-  if [[ -n "$cfg_timeout" ]]; then
-    SCAN_TIMEOUT="$cfg_timeout"
-    _info "using scan_timeout_seconds from config: ${SCAN_TIMEOUT}s"
+  local cfg_timeouts cfg_connect cfg_handshake cfg_read
+  cfg_timeouts="$(_scan_timeouts_from_config "$config_json")"
+  if [[ -n "$cfg_timeouts" ]]; then
+    read -r cfg_connect cfg_handshake cfg_read <<<"$cfg_timeouts"
+    SCAN_TIMEOUT="$cfg_connect"
+    SCAN_TLS_HANDSHAKE_TIMEOUT="${cfg_handshake:-$cfg_connect}"
+    SCAN_READ_TIMEOUT="${cfg_read:-$cfg_connect}"
+    _info "using timeouts from config: connect=${SCAN_TIMEOUT}s handshake=${SCAN_TLS_HANDSHAKE_TIMEOUT}s read=${SCAN_READ_TIMEOUT}s"
   fi
 
   if ! _honour_scan_frequency "$config_json"; then
@@ -579,7 +627,7 @@ for line in sys.stdin:
     fi
     _info "scanning ${host}:${port}"
     local envelope
-    envelope="$(_scan_endpoint "$host" "$port" "$SCAN_TIMEOUT")" || envelope=""
+    envelope="$(_scan_endpoint "$host" "$port" "$SCAN_TIMEOUT" "$SCAN_TLS_HANDSHAKE_TIMEOUT" "$SCAN_READ_TIMEOUT")" || envelope=""
     if [[ -z "$envelope" ]]; then
       _info "probe produced no output at ${host}:${port}"
       continue
