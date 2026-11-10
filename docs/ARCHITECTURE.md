@@ -1,19 +1,19 @@
 # Architecture
 
 **Category:** architecture  
-**Last updated:** 2026-11-07  
+**Last updated:** 2026-11-10  
 **Audience:** platform architects, ops on rota
 
 ## TL;DR
 
-Public **MIT** packaging for pristine upstream [acme.sh](https://github.com/acmesh-official/acme.sh) (GPL archive) plus AxelSpire MIT scan companion / deploy-hook. Own-repo SoT for Linux agent install (`install.sh`); not the separate `at3am` ACME client product. Companion posts `probe_failures` for silent/unreachable TLS targets (DESIGN-189).
+Public **MIT** packaging for pristine upstream [acme.sh](https://github.com/acmesh-official/acme.sh) (GPL archive) plus AxelSpire MIT scan companion / deploy-hook. Own-repo SoT for Linux agent install (`install.sh`); not the separate `at3am` ACME client product. Companion posts `probe_failures` for silent/unreachable TLS targets (DESIGN-189). Honours `AgentConfig.timeouts` (DATASINK-86).
 
 ## Overview
 
 - One-curl install from customer root (`axel.<customer>.3am.global/root/agent/acme.sh/install.sh`).
 - Pin == upstream acme.sh tag; digest-verified archive; wrapper stamps `Le_DeployHook=3am_scan`.
 - Companion talks to datasink scan APIs; no secrets in `3am-scan.env` beyond scan endpoints.
-- `3am-scan.sh` emits ResultsBatch `probe_failures[]` when connect/TLS fails, preferring `scan_timeout_seconds` from `/config`.
+- `3am-scan.sh` emits ResultsBatch `probe_failures[]` when connect/TLS fails, preferring `timeouts.{connect,tls_handshake,read}_seconds` from `/config` (fallback `scan_timeout_seconds`, then local `SCAN_TIMEOUT`).
 - See `OWN_REPO.md`, `PUBLIC-OSS.md`, and console Agents catalog.
 
 ## Update log
@@ -22,6 +22,7 @@ Human-facing product history for operators. **Criterion links** live in the Axel
 
 | Date (UTC) | Summary | PR |
 | --- | --- | --- |
+| 2026-11-10 | DATASINK-86: honour AgentConfig.timeouts connect/handshake/read | (this PR) |
 | 2026-11-07 | DESIGN-190: network metadata probes once per companion VERSION (local marker; re-run on upgrade) | (this PR) |
 | 2026-11-07 | DESIGN-189: companion reports probe_failures for unreachable TLS targets | (this PR) |
 | 2026-10-24 | publish-pin warns when `agent-pin-publish` has no required reviewers (DESIGN-43) | [#17](https://github.com/Axelspire/3am-agent-acme-sh/pull/17) |

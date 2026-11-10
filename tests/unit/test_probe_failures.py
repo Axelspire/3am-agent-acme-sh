@@ -21,48 +21,44 @@ SCAN = ROOT / "3am-scan.sh"
 def _extract_scan_endpoint_python() -> str:
     """Pull the python heredoc body from _scan_endpoint for unit testing."""
     text = SCAN.read_text(encoding="utf-8")
-    start = text.index("python3 - \"$host\" \"$port\" \"$timeout\" <<'PY'")
+    start = text.index(
+        "python3 - \"$host\" \"$port\" \"$connect_to\" \"$handshake_to\" \"$read_to\" <<'PY'"
+    )
     body_start = text.index("\n", start) + 1
     end = text.index("\nPY\n", body_start)
     return text[body_start:end]
 
 
+def _extract_timeouts_helper() -> str:
+    text = SCAN.read_text(encoding="utf-8")
+    start = text.index("_scan_timeouts_from_config() {")
+    end = text.index("\n_scan_timeout_from_config() {", start)
+    return text[start:end]
+
+
 def test_scan_timeout_prefers_config_field():
+    helper_body = _extract_timeouts_helper()
     script = textwrap.dedent(
         r"""
         set -euo pipefail
-        source ./3am-scan.sh
-        """
-    )
-    # 3am-scan.sh runs main at end — cannot source. Call the helper via bash extract.
-    helper = textwrap.dedent(
-        r"""
-        set -euo pipefail
         SCAN_TIMEOUT=5
+        __HELPER__
         _scan_timeout_from_config() {
-          local cfg="$1"
-          printf '%s' "$cfg" | python3 -c '
-        import json, sys
-        doc = json.load(sys.stdin)
-        for key in ("scan_timeout_seconds", "tls_connect_timeout_seconds"):
-            v = doc.get(key)
-            if v is None:
-                continue
-            try:
-                n = int(v)
-                if n >= 1:
-                    print(n)
-                    raise SystemExit(0)
-            except (TypeError, ValueError):
-                pass
-        print("")
-        ' 2>/dev/null || true
+          local all
+          all="$(_scan_timeouts_from_config "$1")"
+          if [[ -z "$all" ]]; then
+            printf ''
+            return 0
+          fi
+          printf '%s' "${all%% *}"
         }
         out="$(_scan_timeout_from_config '{"scan_timeout_seconds":9}')"
         test "$out" = "9"
+        out2="$(_scan_timeouts_from_config '{"timeouts":{"connect_seconds":11,"tls_handshake_seconds":12,"read_seconds":13}}')"
+        test "$out2" = "11 12 13"
         """
-    )
-    subprocess.run(["bash", "-c", helper], check=True, cwd=str(ROOT))
+    ).replace("__HELPER__", helper_body)
+    subprocess.run(["bash", "-c", script], check=True, cwd=str(ROOT))
 
 
 def test_probe_failure_on_refused_port():
