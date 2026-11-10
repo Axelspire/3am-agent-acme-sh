@@ -25,6 +25,7 @@
 #   SCAN_USE_SCOPE=1  force legacy GET /scope instead of OpenAPI /config
 #   SCAN_EXPAND=1     expand assigned_cidrs under max_expand_hosts budget
 #   SCAN_STATE_DIR    directory for last-scan timestamp (default: ~/.local/state/3am)
+#   SCAN_AGENT_VERSION  override companion VERSION (else read from install paths)
 #
 # Usage:
 #   ./3am-scan.sh                  # pull config, scan, POST results
@@ -411,11 +412,72 @@ _touch_scan_stamp() {
   date +%s >"$stamp_file"
 }
 
+_agent_version() {
+  # Companion VERSION — probes re-run when this changes (DESIGN-190).
+  if [[ -n "${SCAN_AGENT_VERSION:-}" ]]; then
+    printf '%s\n' "$SCAN_AGENT_VERSION"
+    return 0
+  fi
+  local candidates=()
+  local here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  candidates+=("${here}/VERSION")
+  if [[ -n "${THREEAM_LIB_DIR:-}" ]]; then
+    candidates+=("${THREEAM_LIB_DIR}/VERSION")
+  fi
+  if [[ -n "${THREEAM_ACME_HOME:-}" ]]; then
+    candidates+=("${THREEAM_ACME_HOME}/deploy/VERSION")
+  fi
+  candidates+=("${HOME:-}/.acme.sh/deploy/VERSION")
+  candidates+=("${HOME:-}/.local/lib/3am/VERSION")
+  local f
+  for f in "${candidates[@]}"; do
+    if [[ -f "$f" ]]; then
+      tr -d '[:space:]' <"$f"
+      return 0
+    fi
+  done
+  printf 'unknown\n'
+}
+
+_network_probes_marker_path() {
+  printf '%s\n' "${SCAN_STATE_DIR}/last-network-probes-${HOST_ID//\//_}"
+}
+
+_network_probes_already_done() {
+  # Exit 0 if probe set already completed for this companion version.
+  local ver="$1"
+  [[ -n "$ver" ]] || return 1
+  mkdir -p "$SCAN_STATE_DIR"
+  local marker
+  marker="$(_network_probes_marker_path)"
+  [[ -f "$marker" ]] || return 1
+  local last
+  last="$(tr -d '[:space:]' <"$marker" 2>/dev/null || true)"
+  [[ "$last" == "$ver" ]]
+}
+
+_mark_network_probes_done() {
+  local ver="$1"
+  [[ -n "$ver" ]] || return 0
+  mkdir -p "$SCAN_STATE_DIR"
+  printf '%s\n' "$ver" >"$(_network_probes_marker_path)"
+}
+
 _run_network_probes() {
   # Args: config JSON → prints JSON array of probe results (may be empty).
   # Collect/forward only — do not parse account ids (DATASINK-73).
+  # DESIGN-190: run once per companion VERSION (skip when marker matches).
   local config_json="$1"
-  python3 - "$config_json" "$SCAN_TIMEOUT" <<'PY'
+  local ver
+  ver="$(_agent_version)"
+  if _network_probes_already_done "$ver"; then
+    _info "network probes already completed for companion version ${ver}; skipping"
+    printf '%s\n' "[]"
+    return 0
+  fi
+  local probe_json
+  probe_json="$(python3 - "$config_json" "$SCAN_TIMEOUT" <<'PY'
 import json, sys, base64, urllib.request, urllib.error, ssl, time
 
 doc = json.loads(sys.argv[1])
@@ -502,6 +564,14 @@ for probe in probes:
 
 print(json.dumps(out))
 PY
+)" || {
+    _info "network probes failed for companion version ${ver}; will retry next cycle"
+    printf '%s\n' "[]"
+    return 0
+  }
+  _mark_network_probes_done "$ver"
+  _info "network probes completed for companion version ${ver}"
+  printf '%s\n' "$probe_json"
 }
 
 _cli_targets_to_hostports() {
